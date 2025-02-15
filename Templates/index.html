@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <!-- iOS Home Screen Web App Settings -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Stage Audio">
+
+    <!-- Ensure Full-Screen Display -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    
+    <title>Stage Audio - Daily</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 0;
+        }
+
+        header {
+            background-color: #343a40;
+            color: white;
+            text-align: center;
+            padding: 20px 0;
+        }
+
+        main {
+            padding: 20px;
+            max-width: 1200px;
+            margin: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+            table-layout: fixed;
+        }
+
+        th, td {
+            padding: 10px;
+            text-align: center;
+            border: 1px solid #ddd;
+            word-wrap: break-word;
+        }
+
+        th {
+            background-color: #343a40;
+            color: white;
+            cursor: pointer;
+        }
+
+        th:nth-child(1), td:nth-child(1) {
+            width: 50%;
+        }
+
+        th:nth-child(2), td:nth-child(2),
+        th:nth-child(3), td:nth-child(3) {
+            width: 25%;
+        }
+
+        .fully-prepped {
+            background-color: #d4edda !important;
+        }
+
+        .partially-prepped {
+            background-color: #ffeeba !important;
+        }
+
+        .not-prepped {
+            background-color: #f8d7da !important;
+        }
+
+        .sticky button {
+            width: 100%;
+            padding: 10px;
+            font-size: 1.2em;
+            background-color: #343a40;
+            color: white;
+            border: none;
+            cursor: pointer;
+            text-align: left;
+        }
+
+        .sticky button:hover {
+            background-color: #495057;
+        }
+
+        .summary-table th, .summary-table td {
+            width: 50% !important;
+        }
+
+        .footer {
+            text-align: center;
+            background-color: #343a40;
+            color: white;
+            font-size: x-large;
+        }
+
+    </style>
+    <script>
+        let currentSort = {};
+        const openSections = new Set();
+
+        function getSuffix(count) {
+            if (count % 10 === 1 && count % 100 !== 11) return 'список';
+            if ([2, 3, 4].includes(count % 10) && ![12, 13, 14].includes(count % 100)) return 'списка';
+            return 'списков';
+        }
+
+        function getDateForDay(index) {
+            const today = new Date();
+            const date = new Date(today);
+            date.setDate(today.getDate() + index);
+            return date.toLocaleDateString('ru-RU');
+        }
+
+        function fetchData() {
+            fetch('/api/data')
+                .then(response => response.json())
+                .then(data => updateTable(data))
+                .catch(error => console.error('Error fetching data:', error));
+        }
+
+        function sortTable(day, key) {
+            const direction = currentSort[day]?.key === key && currentSort[day].direction === 'asc' ? 'desc' : 'asc';
+            currentSort[day] = { key, direction };
+            updateTable(window.lastFetchedData);
+        }
+
+        function toggleVisibility(id, button) {
+            const section = document.getElementById(id);
+            if (section) {
+                section.style.display = section.style.display === 'none' ? 'block' : 'none';
+                if (section.style.display === 'block') {
+                    openSections.add(id);
+                    button.innerHTML = '▼ ' + button.innerHTML.slice(2);
+                } else {
+                    openSections.delete(id);
+                    button.innerHTML = '▶ ' + button.innerHTML.slice(2);
+                }
+            }
+        }
+
+        function getBackgroundColor(defcon, eqlTitle) {
+            console.log(`Defcon: ${defcon}, Title: ${eqlTitle}, Highlight: ${eqlTitle.includes('СУБ') || eqlTitle.includes('\u0421\u0423\u0411')}`);
+            let bgcol = '#ffffff';
+
+            if (defcon === 4) bgcol = '#F75D59';    // Red for "Picking in progress"
+            else if (defcon === 3) bgcol = '#38ACEC'; // Blue for "Confirmed"
+            else if (defcon > 4) bgcol = '#E0B0FF';  // Purple for "Active"
+            else if (defcon === 2) bgcol = '#57E964'; // Green for "Provisional"
+
+            // Check for the presence of 'СУБ' using both plain text and Unicode match
+            return (eqlTitle.includes('СУБ') || eqlTitle.includes('\u0421\u0423\u0411')) ? '#ffd9c9' : bgcol;
+
+        }
+    
+
+        function updateTable(data) {
+            window.lastFetchedData = data;
+            const mainSection = document.querySelector('main');
+            let content = '';
+            const days = ['Сегодня', 'Завтра', 'Послезавтра'];
+            const dayKeys = ['Today', 'Tomorrow', 'Day After Tomorrow'];
+
+            dayKeys.forEach((key, index) => {
+                const day = days[index];
+                const date = getDateForDay(index);
+                if (data[key]) {
+                    let preppedLists = 0, toBePreppedLists = 0;
+
+                    const groupedByEqlTitle = {};
+
+                    data[key].forEach(item => {
+                        if (!groupedByEqlTitle[item.Eql_title]) {
+                            groupedByEqlTitle[item.Eql_title] = [];
+                        }
+                        groupedByEqlTitle[item.Eql_title].push(item);
+                    });
+
+                    Object.values(groupedByEqlTitle).forEach(items => {
+                        const allPrepped = items.every(item => item.PreppedQty === item.Quant);
+                        if (allPrepped) preppedLists++;
+                        else toBePreppedLists++;
+                    });
+
+                    content += `<h2>${day} - ${date}</h2>`;
+
+                    if (preppedLists === 0 && toBePreppedLists === 0) {
+                        content += `<p>Ничего не нужно собирать.</p>`;
+                    } else {
+                        if (preppedLists > 0) {
+                            content += `<p>${preppedLists} ${getSuffix(preppedLists)} подготовлено</p>`;
+                        }
+                        if (toBePreppedLists > 0) {
+                            content += `<p>${toBePreppedLists} ${getSuffix(toBePreppedLists)} нужно подготовить</p>`;
+                        }
+                    }
+
+                    Object.entries(groupedByEqlTitle).forEach(([eqlTitle, items], idx) => {
+                        const jobRef = items[0].Job_Ref || '';
+                        const jobTitle = items[0].Job_Title || '';
+                        const sectionId = `section-${key}-${idx}`;
+                        const bgColor = getBackgroundColor(items[0].Defcon, items[0].Eql_title);
+
+                        content += `<div class="sticky" style="background-color: ${bgColor} !important; padding: 10px; margin: 5px 0;">
+                            <button onclick="toggleVisibility('${sectionId}', this)">${openSections.has(sectionId) ? '▼' : '▶'} ${jobRef} - ${jobTitle}
+                                <p>${eqlTitle}</p>
+                                </button>
+                        </div>`;
+
+                        content += `<div id="${sectionId}" style="display: ${openSections.has(sectionId) ? 'block' : 'none'};">`;
+
+                        if (currentSort[key]?.key) {
+                            items.sort((a, b) => {
+                                if (currentSort[key].direction === 'asc') {
+                                    return a[currentSort[key].key] > b[currentSort[key].key] ? 1 : -1;
+                                } else {
+                                    return a[currentSort[key].key] < b[currentSort[key].key] ? 1 : -1;
+                                }
+                            });
+                        }
+
+                        content += `<table border="1">
+                            <tr>
+                                <th onclick="sortTable('${key}', 'Equipment_Name')">Оборудование ${currentSort[key]?.key === 'Equipment_Name' ? (currentSort[key].direction === 'asc' ? '▲' : '▼') : ''}</th>
+                                <th onclick="sortTable('${key}', 'PreppedQty')">Подготовлено ${currentSort[key]?.key === 'PreppedQty' ? (currentSort[key].direction === 'asc' ? '▲' : '▼') : ''}</th>
+                                <th onclick="sortTable('${key}', 'Quant')">Подготовить ${currentSort[key]?.key === 'Quant' ? (currentSort[key].direction === 'asc' ? '▲' : '▼') : ''}</th>
+                            </tr>`;
+
+                        items.forEach(item => {
+                            let rowClass = item.PreppedQty === item.Quant ? 'fully-prepped' : (item.PreppedQty > 0 ? 'partially-prepped' : 'not-prepped');
+                            content += `<tr class="${rowClass}">
+                                <td>${item.Equipment_Name || ''}</td>
+                                <td>${item.PreppedQty}</td>
+                                <td>${item.Quant}</td>
+                            </tr>`;
+                        });
+
+                        content += `</table></div>`;
+                    });
+                }
+            });
+
+            if (data.Total) {
+                content += `<h2>Итог</h2>
+                    <table border="1" class="summary-table">
+                        <tr>
+                            <th>Подготовлено</th>
+                            <th>Подготовить</th>
+                        </tr>
+                        <tr class="${data.Total.Total_Prepped === data.Total.Total_Items ? 'fully-prepped' : (data.Total.Total_Prepped > 0 ? 'partially-prepped' : 'not-prepped')}">
+                            <td>${data.Total.Total_Prepped}</td>
+                            <td>${data.Total.Total_Items}</td>
+                        </tr>
+                    </table>`;
+            }
+
+            mainSection.innerHTML = content;
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            fetchData();
+            setInterval(fetchData, 30000);
+        });
+    </script>
+</head>
+<body>
+    <header>
+        <h1>STAGE AUDIO - Склад</h1>
+    </header>
+
+    <main>
+        <!-- Content will be dynamically updated here -->
+    </main>
+
+    <footer class="footer">
+        <h4>Generated by ES</h4>
+    </footer>
+</body>
+</html>
