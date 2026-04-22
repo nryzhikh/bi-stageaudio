@@ -15,10 +15,6 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TZ=UTC
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
- && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 # Layer caching: install deps before copying source so code edits don't
@@ -29,12 +25,13 @@ RUN pip install --no-cache-dir -r /app/apps/sync-worker/requirements.txt
 COPY apps/sync-worker/ /app/apps/sync-worker/
 
 # Non-root runtime. /data/reports is bind-mountable for persisted sync reports.
-RUN useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin sync \
+# NB: the name `sync` is reserved by Debian (UID 4, /bin/sync), so use `app`.
+RUN useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin app \
  && mkdir -p /data/reports \
  && chmod +x /app/apps/sync-worker/entrypoint.sh \
- && chown -R sync:sync /data /app
+ && chown -R app:app /data /app
 
-USER sync
+USER app
 
 ENV SYNC_REPORT_DIR=/data/reports
 
