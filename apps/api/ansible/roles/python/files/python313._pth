@@ -1,0 +1,7 @@
+python313.zip
+.
+Lib\site-packages
+
+# Enable site.py so Lib\site-packages is importable and pip-installed
+# packages (flask, pyodbc, waitress) are found at runtime.
+import site

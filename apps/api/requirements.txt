@@ -1,0 +1,8 @@
+# HireTrack Sync API - Server Dependencies
+# Install on Windows: pip install -r requirements.txt
+#
+# Python 3.13 (32-bit) only — NexusDB ODBC driver is 32-bit.
+
+flask==3.0.3
+pyodbc==5.2.0
+waitress==3.0.2

@@ -1,0 +1,24 @@
+.DS_Store
+.env
+deploy/.env
+venv/
+venv
+**/__pycache__/
+**/*.pyc
+.envrc
+
+# Runtime state and generated reports
+var/runtime/*
+var/artifacts/*
+!var/README.md
+!var/artifacts/
+!var/artifacts/reports/
+!var/runtime/
+*.log
+
+# Large local artifacts / backups
+deploy/backups/
+trash/
+
+# Ansible Galaxy collections are installed from requirements.yml, not vendored.
+apps/api/ansible/collections/ansible_collections/

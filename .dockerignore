@@ -1,0 +1,29 @@
+# Keep build context small — otherwise the 1.5 MB catalog.yaml and every
+# archived script we're not using lands in every image layer.
+.git
+.gitignore
+.venv
+.env
+.DS_Store
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# Runtime artefacts that have no business in an image
+var/
+*.csv
+
+# Archived / legacy code we don't build
+archive/
+tools/
+Templates/
+app.py
+
+# Infra + docs — built separately or not needed inside the image
+infra-ansible/
+ansible/
+deploy/backups/
+DEPLOYMENT.md
+README.md
+
+# Data-science scratchpads

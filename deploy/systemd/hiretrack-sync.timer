@@ -1,0 +1,12 @@
+[Unit]
+Description=Run HireTrack incremental sync every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+RandomizedDelaySec=120
+Unit=hiretrack-sync.service
+
+[Install]
+WantedBy=timers.target
+

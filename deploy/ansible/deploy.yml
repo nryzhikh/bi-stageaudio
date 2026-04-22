@@ -1,0 +1,8 @@
+---
+- name: Deploy HireTrack stack to Linux VPS
+  hosts: linux
+  become: true
+  gather_facts: true
+  roles:
+    - hiretrack_stack
+

@@ -1,0 +1,10 @@
+---
+nssm_version: '2.24'
+
+# Target path. Override in group_vars to colocate with your app.
+nssm_home: 'C:\Program Files\nssm'
+nssm_exe: '{{ nssm_home }}\nssm.exe'
+
+# Local binary, vendored under roles/nssm/files/ so deploys are offline-capable
+# and not dependent on nssm.cc availability. See files/CHECKSUMS.txt.
+nssm_local_binary: 'nssm-{{ nssm_version }}-win64.exe'

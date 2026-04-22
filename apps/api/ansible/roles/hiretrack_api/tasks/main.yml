@@ -1,0 +1,72 @@
+---
+- name: Ensure application directories exist
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  loop:
+    - "{{ app_root }}"
+    - "{{ app_server_dir }}"
+
+- name: Deploy application files
+  ansible.windows.win_copy:
+    src: "{{ item }}"
+    dest: "{{ app_server_dir }}\\"
+  loop:
+    - "{{ app_source_dir }}/app.py"
+    - "{{ app_source_dir }}/requirements.txt"
+  notify: Restart HireTrack API
+
+- name: Install Python dependencies (pinned) into the embedded interpreter
+  # No venv: the embeddable Python is already isolated (lives under app_root).
+  # Packages install into {{ python_home }}\Lib\site-packages.
+  ansible.windows.win_command: >
+    "{{ python_exe }}" -m pip install --disable-pip-version-check
+    --no-warn-script-location
+    -r "{{ app_server_dir }}\requirements.txt"
+  register: hiretrack_api_pip_install
+  changed_when: "'Successfully installed' in hiretrack_api_pip_install.stdout"
+  notify: Restart HireTrack API
+
+- name: Verify waitress-serve shim exists
+  # In --check mode the pip install task is skipped (win_command is a side-
+  # effecting action), so the shim won't exist yet on a first-ever dry run.
+  # Only hard-fail on the real run.
+  ansible.windows.win_stat:
+    path: "{{ waitress_exe }}"
+  register: hiretrack_api_waitress_stat
+  failed_when:
+    - not ansible_check_mode
+    - not hiretrack_api_waitress_stat.stat.exists
+
+- name: Register HireTrack API as a Windows service via NSSM (waitress WSGI)
+  community.windows.win_nssm:
+    executable: "{{ nssm_exe }}"
+    name: "{{ app_service_name }}"
+    application: "{{ waitress_exe }}"
+    arguments:
+      - "--listen=0.0.0.0:{{ app_port }}"
+      - "--threads=8"
+      - "app:app"
+    app_directory: "{{ app_server_dir }}"
+    display_name: HireTrack Database Sync API
+    description: REST API for HireTrack database access and BI tool integration
+    start_mode: auto
+    state: present
+    stdout_file: "{{ app_server_dir }}\\service.log"
+    stderr_file: "{{ app_server_dir }}\\service_error.log"
+    app_environment:
+      API_PORT: "{{ app_port | string }}"
+      API_HOST: 0.0.0.0
+      DSN_NAME: "{{ dsn_name }}"
+      NX_DB_USER: "{{ nx_db_user }}"
+      NX_DB_PASSWORD: "{{ nx_db_password }}"
+      API_USERNAME: "{{ flask_api_username }}"
+      API_PASSWORD: "{{ flask_api_password }}"
+  no_log: true
+  notify: Restart HireTrack API
+
+- name: Ensure service is running
+  ansible.windows.win_service:
+    name: "{{ app_service_name }}"
+    state: started
+    start_mode: auto

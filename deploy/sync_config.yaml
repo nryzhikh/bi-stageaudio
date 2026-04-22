@@ -1,0 +1,60 @@
+# HireTrack -> MySQL sync policy.
+#
+# This file is part of the runtime deploy bundle. The sync worker container
+# mounts it from `./sync_config.yaml` inside the VPS checkout under `deploy/`.
+#
+# Sections
+#   skip          - tables never pulled. Crash the API or useless (blobs/emails).
+#   incremental   - tables pulled as deltas. Keys must match API table names 1:1.
+#                     field : column used as watermark (monotonic int, date, etc.)
+#                     pk    : optional. Declares the UPSERT key in MySQL. Use when
+#                             rows in the source can be updated, not just appended.
+#                             Without pk: straight INSERT (assumes append-only —
+#                             reruns WILL duplicate rows if sources mutate).
+#
+# Anything not listed in either section is synced via full refresh — now via
+# staging table plus atomic swap.
+#
+# Incremental watermarks are stored in MySQL metadata table `_sync_table_state`.
+
+skip:
+  - Email_Incoming
+  - Email_IncomingAttachments
+  - Email_Outgoing
+  - Email_OutgoingAttachments
+  - DocumentStore
+  - Photos
+  - Signatures
+
+incremental:
+  SORT:
+    field: LastModified
+    pk: Lineref
+  OperationsDetail:
+    field: ModifyDate
+    pk: IDX
+  OpertaionsHeader:
+    field: IDX
+  OpScans:
+    pk: Idx
+    field: ScanDate
+  TypePics:
+    field: IDX
+  Audit:
+    field: Auditkey
+  Crew:
+    pk: Idx
+    field: ModifiedDate
+  CrewActivities:
+    field: IDX
+  CrewShifts:
+    field: IDX
+  JobLogs:
+    pk: IDX
+    field: ChangeDate
+  EQLISTS:
+    pk: Eql_no
+    field: ModDate
+  StockTakeDetails:
+    pk: IDX
+    field: SeenDate

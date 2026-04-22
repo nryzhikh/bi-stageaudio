@@ -1,0 +1,6 @@
+# NSSM 2.24 binary checksums (SHA-256)
+# Source: https://nssm.cc/release/nssm-2.24.zip (retrieved via Wayback Machine)
+# Upstream archive SHA-256:
+#   727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743  nssm-2.24.zip
+
+f689ee9af94b00e9e3f0bb072b34caaf207f32dcb4f5782fc9ca351df9a06c97  nssm-2.24-win64.exe

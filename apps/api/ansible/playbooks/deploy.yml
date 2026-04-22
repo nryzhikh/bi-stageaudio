@@ -1,0 +1,6 @@
+---
+- name: Redeploy HireTrack Sync API (code only)
+  hosts: windows
+  gather_facts: false
+  roles:
+    - hiretrack_api

@@ -1,0 +1,35 @@
+---
+- name: Allow SSH from Tailscale CGNAT only
+  community.windows.win_firewall_rule:
+    name: SSH-Tailscale
+    localport: 22
+    remoteip: "{{ tailscale_cgnat_cidr }}"
+    action: allow
+    direction: in
+    protocol: tcp
+    state: present
+    enabled: true
+  tags: [firewall, ssh]
+
+- name: Disable default "allow all" SSH rule (opt-in lockdown)
+  # Gated behind a flag because disabling the default rule before the
+  # Tailscale-scoped one is proven working risks loss of SSH access.
+  community.windows.win_firewall_rule:
+    name: OpenSSH-Server-In-TCP
+    state: present
+    enabled: false
+  when: firewall_lockdown_default_ssh | bool
+  failed_when: false
+  tags: [firewall, ssh, lockdown]
+
+- name: Allow HireTrack API from Tailscale CGNAT only
+  community.windows.win_firewall_rule:
+    name: HireTrackAPI-Tailscale
+    localport: "{{ app_port }}"
+    remoteip: "{{ tailscale_cgnat_cidr }}"
+    action: allow
+    direction: in
+    protocol: tcp
+    state: present
+    enabled: true
+  tags: [firewall, api]

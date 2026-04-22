@@ -1,0 +1,12 @@
+---
+python_version: '3.13.13'
+
+# Target path. Override in group_vars to colocate with your app.
+python_home: 'C:\Python313'
+python_exe: '{{ python_home }}\python.exe'
+
+# Vendored artifacts under files/. Deploys are offline-capable; no dependency
+# on python.org or pypa.io availability at deploy time. See CHECKSUMS.txt.
+python_embed_zip: 'python-{{ python_version }}-embed-win32.zip'
+python_pth_file: 'python313._pth'
+python_get_pip_script: 'get-pip.py'

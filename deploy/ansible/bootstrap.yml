@@ -1,0 +1,9 @@
+---
+- name: Bootstrap HireTrack Linux VPS
+  hosts: linux
+  become: true
+  gather_facts: true
+  roles:
+    - common
+    - docker_host
+

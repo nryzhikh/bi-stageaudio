@@ -1,0 +1,14 @@
+---
+- name: Ensure NSSM target directory exists
+  ansible.windows.win_file:
+    path: "{{ nssm_home }}"
+    state: directory
+  tags: [nssm]
+
+- name: Deploy vendored nssm.exe
+  # win_copy is idempotent: transfers only when source/target checksums differ.
+  # Source lives in roles/nssm/files/ and is version-controlled.
+  ansible.windows.win_copy:
+    src: "{{ nssm_local_binary }}"
+    dest: "{{ nssm_exe }}"
+  tags: [nssm]

@@ -1,0 +1,23 @@
+---
+# Bootstrap: runs via `raw` so it works even when the SSH login shell is still
+# cmd.exe (brand-new Win32-OpenSSH hosts). Sets DefaultShell to PowerShell so
+# subsequent Ansible modules (which require ansible_shell_type=powershell) work.
+- name: Bootstrap DefaultShell to PowerShell via raw
+  # Uses reg.exe (cmd-native) so it works regardless of whether the current
+  # SSH login shell is cmd.exe or PowerShell. Avoids PowerShell quoting issues.
+  ansible.builtin.raw: >-
+    reg add "HKLM\SOFTWARE\OpenSSH" /v DefaultShell /t REG_SZ
+    /d "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" /f
+  changed_when: false
+  tags: [bootstrap, openssh]
+
+# Declarative: reports drift on subsequent runs and triggers a restart when
+# a human has flipped the value back.
+- name: Ensure OpenSSH DefaultShell is PowerShell
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\OpenSSH
+    name: DefaultShell
+    data: 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+    type: string
+  notify: restart sshd
+  tags: [openssh]

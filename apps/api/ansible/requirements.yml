@@ -1,0 +1,9 @@
+---
+# Pin modern collection versions. Older versions (<2.6) still import the
+# deprecated ansible.module_utils._text paths which trigger deprecation
+# warnings under ansible-core 2.17+.
+collections:
+  - name: ansible.windows
+    version: ">=3.0.0,<4.0.0"
+  - name: community.windows
+    version: ">=2.6.0,<4.0.0"

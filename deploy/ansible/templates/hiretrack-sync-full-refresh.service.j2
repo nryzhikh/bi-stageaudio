@@ -1,0 +1,11 @@
+[Unit]
+Description=HireTrack weekly full refresh
+Wants=docker.service network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{ hiretrack_deploy_root }}/deploy
+ExecStart=/usr/bin/docker compose run --rm sync-client full-refresh --lock-timeout {{ hiretrack_full_refresh_lock_timeout }}
+TimeoutStartSec=24h
+

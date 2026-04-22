@@ -1,0 +1,19 @@
+---
+- name: Bootstrap HireTrack Sync API on Windows
+  hosts: windows
+  # Defer fact gathering; setup uses PowerShell modules and will fail on a
+  # fresh host whose DefaultShell is still cmd.exe. openssh_shell fixes that.
+  gather_facts: false
+  pre_tasks:
+    - name: Ensure OpenSSH default shell is PowerShell (bootstrap)
+      ansible.builtin.import_role:
+        name: openssh_shell
+
+    - name: Gather facts now that PowerShell is the default shell
+      ansible.builtin.setup:
+  roles:
+    - python
+    - nssm
+    - firewall
+    # - nexusdb_odbc   # driver already installed and DSN configured by hand
+    - hiretrack_api

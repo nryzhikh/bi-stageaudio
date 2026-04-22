@@ -1,0 +1,5 @@
+---
+- name: Restart HireTrack API
+  ansible.windows.win_service:
+    name: "{{ app_service_name }}"
+    state: restarted

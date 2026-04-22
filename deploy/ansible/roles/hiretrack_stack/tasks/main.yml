@@ -1,0 +1,110 @@
+---
+- name: Ensure deployment root exists
+  ansible.builtin.file:
+    path: "{{ hiretrack_deploy_root }}"
+    state: directory
+    owner: "{{ hiretrack_owner }}"
+    group: "{{ hiretrack_group }}"
+    mode: "0755"
+
+- name: Ensure runtime deploy directory exists
+  ansible.builtin.file:
+    path: "{{ hiretrack_deploy_root }}/deploy"
+    state: directory
+    owner: "{{ hiretrack_owner }}"
+    group: "{{ hiretrack_group }}"
+    mode: "0755"
+
+- name: Synchronize deploy bundle to VPS
+  ansible.posix.synchronize:
+    src: "{{ hiretrack_local_deploy_bundle_root }}/"
+    dest: "{{ hiretrack_deploy_root }}/deploy/"
+    delete: true
+    recursive: true
+    rsync_opts:
+      - "--exclude=ansible/"
+      - "--exclude=.env"
+      - "--exclude=systemd/"
+      - "--exclude=.DS_Store"
+  delegate_to: localhost
+  become: false
+
+- name: Set ownership on deployment root
+  ansible.builtin.file:
+    path: "{{ hiretrack_deploy_root }}"
+    state: directory
+    recurse: true
+    owner: "{{ hiretrack_owner }}"
+    group: "{{ hiretrack_group }}"
+
+- name: Render compose environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ hiretrack_deploy_root }}/deploy/.env"
+    owner: "{{ hiretrack_owner }}"
+    group: "{{ hiretrack_group }}"
+    mode: "0600"
+
+- name: Install systemd incremental sync service
+  ansible.builtin.template:
+    src: hiretrack-sync.service.j2
+    dest: /etc/systemd/system/hiretrack-sync.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install systemd incremental sync timer
+  ansible.builtin.template:
+    src: hiretrack-sync.timer.j2
+    dest: /etc/systemd/system/hiretrack-sync.timer
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install systemd full refresh service
+  ansible.builtin.template:
+    src: hiretrack-sync-full-refresh.service.j2
+    dest: /etc/systemd/system/hiretrack-sync-full-refresh.service
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install systemd full refresh timer
+  ansible.builtin.template:
+    src: hiretrack-sync-full-refresh.timer.j2
+    dest: /etc/systemd/system/hiretrack-sync-full-refresh.timer
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reload systemd after unit changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Validate docker compose configuration
+  ansible.builtin.command:
+    cmd: docker compose config
+    chdir: "{{ hiretrack_deploy_root }}/deploy"
+  changed_when: false
+
+- name: Start long-running compose services
+  ansible.builtin.command:
+    cmd: docker compose up -d {{ hiretrack_compose_services | join(' ') }}
+    chdir: "{{ hiretrack_deploy_root }}/deploy"
+  register: hiretrack_compose_up
+  changed_when: >
+    'Started' in hiretrack_compose_up.stdout or
+    'Recreated' in hiretrack_compose_up.stdout or
+    'Created' in hiretrack_compose_up.stdout
+
+- name: Enable incremental sync timer
+  ansible.builtin.systemd:
+    name: hiretrack-sync.timer
+    enabled: true
+    state: started
+
+- name: Enable full refresh timer
+  ansible.builtin.systemd:
+    name: hiretrack-sync-full-refresh.timer
+    enabled: true
+    state: started

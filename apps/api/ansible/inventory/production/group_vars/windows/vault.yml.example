@@ -1,0 +1,14 @@
+---
+# Copy to vault.yml (in this same directory) and encrypt with:
+#   ansible-vault encrypt inventory/production/group_vars/windows/vault.yml
+
+vault_nx_db_user: Zapier1
+vault_nx_db_password: CHANGE_ME
+
+vault_flask_api_username: admin
+vault_flask_api_password: CHANGE_ME
+
+# NexusDB ODBC driver installer (you host this on S3 or a reachable URL)
+vault_nexusdb_installer_url: https://your-bucket.s3.amazonaws.com/NexusDB_ODBC_4.x.msi
+vault_nexusdb_installer_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+vault_nexusdb_product_id: '{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}'

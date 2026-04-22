@@ -1,0 +1,38 @@
+---
+- name: Download NexusDB ODBC installer
+  ansible.windows.win_get_url:
+    url: "{{ nexusdb_installer_url }}"
+    dest: 'C:\Windows\Temp\nexusdb_odbc.msi'
+    checksum: "{{ nexusdb_installer_sha256 }}"
+    checksum_algorithm: sha256
+    force: false
+
+- name: Install NexusDB ODBC driver (32-bit)
+  ansible.windows.win_package:
+    path: 'C:\Windows\Temp\nexusdb_odbc.msi'
+    product_id: "{{ nexusdb_product_id }}"
+    state: present
+    arguments: /qn
+
+- name: Register DSN in 32-bit ODBC registry hive
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SOFTWARE\WOW6432Node\ODBC\ODBC.INI\{{ dsn_name }}'
+    name: "{{ item.name }}"
+    data: "{{ item.data }}"
+    type: "{{ item.type | default('string') }}"
+    state: present
+  loop:
+    - { name: Driver,   data: "{{ dsn_driver }}" }
+    - { name: Server,   data: "{{ dsn_host }}" }
+    - { name: Port,     data: "{{ dsn_port }}" }
+    - { name: Database, data: "{{ dsn_database }}" }
+    - { name: UserName, data: "{{ nx_db_user }}" }
+  no_log: true
+
+- name: Advertise DSN in ODBC Data Sources list
+  ansible.windows.win_regedit:
+    path: 'HKLM:\SOFTWARE\WOW6432Node\ODBC\ODBC.INI\ODBC Data Sources'
+    name: "{{ dsn_name }}"
+    data: "{{ dsn_driver }}"
+    type: string
+    state: present

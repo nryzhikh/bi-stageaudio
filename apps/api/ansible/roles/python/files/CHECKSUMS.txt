@@ -1,0 +1,6 @@
+# Vendored binary checksums (SHA-256)
+# Verify before trusting. Cross-reference with https://www.python.org/downloads/release/python-31313/
+# and https://pip.pypa.io/en/stable/installation/#get-pip-py
+
+f93abb82d239bdeafa72b2537859f82dc8fa543ec4c4d7eed1bafa3caf374e02  python-3.13.13-embed-win32.zip
+feba1c697df45be1b539b40d93c102c9ee9dde1d966303323b830b06f3fbca3c  get-pip.py

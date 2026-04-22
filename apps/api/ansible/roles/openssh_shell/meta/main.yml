@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: openssh_shell
+  author: infra
+  description: Ensure Win32-OpenSSH uses PowerShell as the default login shell
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Windows
+      versions:
+        - all
+dependencies: []

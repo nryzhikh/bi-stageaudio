@@ -1,0 +1,54 @@
+# Default: treat files as text, normalize line endings to LF in the repo.
+# Cross-platform contributors get consistent diffs regardless of core.autocrlf.
+* text=auto eol=lf
+
+# Source code — explicit LF.
+*.py      text eol=lf
+*.sh      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.toml    text eol=lf
+*.ini     text eol=lf
+*.cfg     text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.sql     text eol=lf
+*.env     text eol=lf
+Dockerfile text eol=lf
+Makefile   text eol=lf
+
+# Windows-native scripts must keep CRLF.
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+*.psm1    text eol=crlf
+*.psd1    text eol=crlf
+
+# Binaries — never convert, never diff as text.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.webp    binary
+*.ico     binary
+*.pdf     binary
+*.zip     binary
+*.gz      binary
+*.tar     binary
+*.xz      binary
+*.7z      binary
+*.exe     binary
+*.dll     binary
+*.msi     binary
+*.so      binary
+*.dylib   binary
+*.pyc     binary
+*.xlsx    binary
+*.xls     binary
+*.docx    binary
+*.doc     binary
+*.pptx    binary
+*.parquet binary
+*.db      binary
+*.sqlite  binary
+*.sqlite3 binary

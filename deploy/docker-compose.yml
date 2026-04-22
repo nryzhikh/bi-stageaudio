@@ -1,0 +1,161 @@
+services:
+
+  caddy:
+    image: caddy:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - ./caddy_config:/config
+      - ./caddy_config/Caddyfile:/etc/caddy/Caddyfile
+
+
+  mysql:
+    image: mysql:8.0
+    container_name: hiretrack-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-hiretrack}
+      MYSQL_USER: ${MYSQL_USER:-hiretrack}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-hiretrack123}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init:/docker-entrypoint-initdb.d
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # postgres:
+  #   image: postgres:16
+  #   container_name: hiretrack-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: ${POSTGRES_DB:-hiretrack}
+  #     POSTGRES_USER: ${POSTGRES_USER:-hiretrack}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hiretrack123}
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U hiretrack"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+  adminer:
+    image: adminer
+    container_name: hiretrack-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mysql
+    environment:
+      ADMINER_DEFAULT_SERVER: mysql
+
+  superset:
+    image: apache/superset:4.1.2-dev  # -dev images include psycopg2
+    container_name: hiretrack-superset
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    depends_on:
+      - mysql
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-your-secret-key-change-me}
+      TALISMAN_ENABLED: "false"
+    volumes:
+      - superset_data:/app/superset_home
+    command: >
+      bash -c "
+        superset db upgrade &&
+        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin || true &&
+        superset init &&
+        superset run -h 0.0.0.0 -p 8088
+      "
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: hiretrack-metabase
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mysql
+    environment:
+      MB_DB_TYPE: h2  # Metabase's internal DB (simpler setup)
+    volumes:
+      - metabase_data:/metabase.db
+
+  # One-shot puller: streams data from the HireTrack Flask API on the Windows
+  # host into this stack's MySQL.
+  #
+  # The intended production model is host-side systemd timers that run:
+  #   docker compose run --rm sync-client
+  #   docker compose run --rm sync-client full-refresh
+  #
+  # Manual runs:
+  #   docker compose run --rm sync-client
+  #   docker compose run --rm sync-client --tables OpScans SORT
+  #   docker compose run --rm sync-client full-refresh
+  sync-client:
+    image: ${SYNC_CLIENT_IMAGE}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # mysql is the in-network service name; never expose 3306 to the
+      # internet for this consumer.
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-hiretrack}
+      MYSQL_USER: ${MYSQL_USER:-hiretrack}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-hiretrack123}
+      # API_URL, API_USERNAME, API_PASSWORD come from .env. No defaults
+      # because pointing at the wrong host silently pulls nothing and
+      # masks config mistakes.
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Config is edited on the host so schedule/policy tweaks don't need
+      # an image rebuild. Read-only prevents the container from scribbling back.
+      - ./sync_config.yaml:/app/apps/sync-worker/sync_config.yaml:ro
+      # Reports persist across container recreates. Incremental watermarks
+      # are stored inside MySQL metadata table `_sync_table_state`.
+      - sync_reports:/data/reports
+
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: hiretrack-grafana
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3001:3000"
+  #   depends_on:
+  #     - mysql
+  #   environment:
+  #     GF_SECURITY_ADMIN_USER: admin
+  #     GF_SECURITY_ADMIN_PASSWORD: admin
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+
+volumes:
+  caddy_data:
+  # postgres_data:
+  superset_data:
+  metabase_data:
+  # grafana_data:
+  mysql_data:
+  sync_reports:

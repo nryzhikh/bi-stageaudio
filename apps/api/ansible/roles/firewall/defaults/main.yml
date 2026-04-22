@@ -1,0 +1,5 @@
+---
+# Set to true only after you've verified the Tailscale-scoped SSH rule works
+# end-to-end. Flipping this on without a working replacement rule can lock you
+# out of the host (RDP / console recovery required).
+firewall_lockdown_default_ssh: false

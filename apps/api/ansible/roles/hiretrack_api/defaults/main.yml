@@ -1,0 +1,2 @@
+---
+app_source_dir: "{{ playbook_dir }}/../.."

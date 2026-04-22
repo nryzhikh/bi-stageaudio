@@ -1,0 +1,11 @@
+[Unit]
+Description=HireTrack incremental sync
+Wants=docker.service network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{ hiretrack_deploy_root }}/deploy
+ExecStart=/usr/bin/docker compose run --rm sync-client --lock-timeout {{ hiretrack_sync_lock_timeout }}
+TimeoutStartSec=12h
+

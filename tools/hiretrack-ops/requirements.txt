@@ -1,0 +1,6 @@
+# HireTrack operator tooling dependencies
+# Install with: pip install -r tools/hiretrack-ops/requirements.txt
+
+requests>=2.25.0
+psycopg2-binary>=2.9.0
+PyYAML>=6.0

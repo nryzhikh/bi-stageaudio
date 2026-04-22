@@ -1,0 +1,21 @@
+---
+- name: Install Docker Engine and Compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Ensure Docker service is enabled and started
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add deploy user to docker group
+  ansible.builtin.user:
+    name: "{{ hiretrack_owner }}"
+    groups: docker
+    append: true
+

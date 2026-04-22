@@ -1,0 +1,11 @@
+superset.stageaudio.cloud {
+    reverse_proxy superset:8088 {
+      flush_interval -1
+    }
+}
+
+metabase.stageaudio.cloud {
+    reverse_proxy metabase:3000 {
+      flush_interval -1
+    }
+}

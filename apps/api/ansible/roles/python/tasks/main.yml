@@ -1,0 +1,80 @@
+---
+- name: Ensure Python home directory exists
+  ansible.windows.win_file:
+    path: "{{ python_home }}"
+    state: directory
+  tags: [python]
+
+- name: Check if python.exe is already present
+  ansible.windows.win_stat:
+    path: "{{ python_exe }}"
+  register: python_stat
+  tags: [python]
+
+- name: Get installed Python version (if present)
+  ansible.windows.win_command: '"{{ python_exe }}" --version'
+  register: python_version_check
+  when: python_stat.stat.exists
+  changed_when: false
+  failed_when: false
+  tags: [python]
+
+- name: Decide if (re)install is needed
+  ansible.builtin.set_fact:
+    python_needs_install: >-
+      {{ not python_stat.stat.exists
+         or python_version not in (python_version_check.stdout | default('')) }}
+  tags: [python]
+
+- name: Stage embeddable zip on target
+  # check_mode: false so --check runs can still preview the unzip/install
+  # steps. Staging into C:\Windows\Temp is harmless; idempotent if unchanged.
+  ansible.windows.win_copy:
+    src: "{{ python_embed_zip }}"
+    dest: 'C:\Windows\Temp\{{ python_embed_zip }}'
+  when: python_needs_install
+  check_mode: false
+  tags: [python]
+
+- name: Extract embeddable zip into python_home
+  community.windows.win_unzip:
+    src: 'C:\Windows\Temp\{{ python_embed_zip }}'
+    dest: "{{ python_home }}"
+  when: python_needs_install
+  tags: [python]
+
+- name: Deploy site-enabled python313._pth
+  # Overwriting the _pth is how we turn the embeddable distribution into a
+  # proper site-packages-aware environment. Without this, pip installs land
+  # in Lib\site-packages but imports fail at runtime.
+  ansible.windows.win_copy:
+    src: "{{ python_pth_file }}"
+    dest: "{{ python_home }}\\{{ python_pth_file }}"
+  tags: [python]
+
+- name: Check if pip is already installed
+  ansible.windows.win_stat:
+    path: "{{ python_home }}\\Scripts\\pip.exe"
+  register: python_pip_stat
+  tags: [python]
+
+- name: Stage get-pip.py on target
+  ansible.windows.win_copy:
+    src: "{{ python_get_pip_script }}"
+    dest: 'C:\Windows\Temp\{{ python_get_pip_script }}'
+  when: not python_pip_stat.stat.exists
+  check_mode: false
+  tags: [python]
+
+- name: Bootstrap pip into the embeddable Python
+  ansible.windows.win_command: >
+    "{{ python_exe }}" "C:\Windows\Temp\{{ python_get_pip_script }}"
+    --no-warn-script-location
+  when: not python_pip_stat.stat.exists
+  tags: [python]
+
+- name: Verify pip is now callable
+  ansible.windows.win_command: '"{{ python_exe }}" -m pip --version'
+  register: python_pip_version
+  changed_when: false
+  tags: [python]

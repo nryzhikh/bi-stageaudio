@@ -1,0 +1,38 @@
+---
+app_root: 'E:\hiretrack-flask-api'
+app_bin_dir: '{{ app_root }}\bin'
+app_server_dir: '{{ app_root }}\server'
+app_service_name: HireTrackFlaskApi
+app_port: 5003
+
+# App-scoped NSSM: colocated under app_root so uninstall = delete-the-folder.
+nssm_home: '{{ app_bin_dir }}'
+nssm_exe: '{{ nssm_home }}\nssm.exe'
+
+# App-scoped Python (embeddable distribution). x86 is mandatory because
+# NexusDB ODBC is 32-bit only. The whole interpreter lives under app_root,
+# so uninstalling the app = delete-the-folder. No system Python required.
+python_version: '3.13.13'
+python_home: '{{ app_root }}\python'
+python_exe: '{{ python_home }}\python.exe'
+waitress_exe: '{{ python_home }}\Scripts\waitress-serve.exe'
+
+# These match the existing HireTrack DSN registered on the Windows host.
+# app.py connects by DSN name alone; these values are kept here only for
+# documentary reference and potential future DSN re-creation via Ansible.
+dsn_name: 'HireTrack DSN'
+dsn_driver: 'NexusDB V3.10 Driver'
+dsn_host: '127.0.0.1'
+dsn_port: 16000
+dsn_database: 'SA'
+
+nexusdb_installer_url: "{{ vault_nexusdb_installer_url }}"
+nexusdb_installer_sha256: "{{ vault_nexusdb_installer_sha256 }}"
+nexusdb_product_id: '{{ vault_nexusdb_product_id }}'   # GUID from installer
+
+tailscale_cgnat_cidr: '100.64.0.0/10'
+
+flask_api_username: "{{ vault_flask_api_username | default('') }}"
+flask_api_password: "{{ vault_flask_api_password | default('') }}"
+nx_db_user: "{{ vault_nx_db_user }}"
+nx_db_password: "{{ vault_nx_db_password }}"
