@@ -1,0 +1,66 @@
+# HireTrack -> MySQL sync policy.
+#
+# Sections
+#   skip          - tables never pulled. Crash the API or useless (blobs/emails).
+#   incremental   - tables pulled as deltas. Keys must match API table names 1:1.
+#                     field : column used as watermark (monotonic int, date, etc.)
+#                     pk    : optional. Declares the UPSERT key in MySQL. Use when
+#                             rows in the source can be updated, not just appended.
+#                             Without pk: straight INSERT (assumes append-only —
+#                             reruns WILL duplicate rows if sources mutate).
+#
+# Anything not listed in either section is synced via full refresh (DROP + CREATE
+# + INSERT) — the safe default for tables without a known watermark column.
+#
+# Incremental watermarks are stored in MySQL metadata table `_sync_table_state`.
+# The old JSON state file is only used as an optional one-time import source.
+
+skip:
+  - Email_Incoming
+  - Email_IncomingAttachments
+  - Email_Outgoing
+  - Email_OutgoingAttachments
+  - DocumentStore
+  - Photos
+  - Signatures
+
+incremental:
+  # Populate as you verify each table's watermark column is actually monotonic.
+  # Examples commented out until you confirm against your schema:
+  #
+  # OpScans:
+  #   field: OpScanID      # assumed append-only; surrogate key
+  # JobLogs:
+  #   field: LogID
+  SORT:
+    field: LastModified
+    pk: Lineref           # rows mutate -> upsert on pk
+  OperationsDetail:
+    field: ModifyDate
+    pk: IDX
+  OpertaionsHeader:
+    field: IDX
+  OpScans:
+    pk: Idx
+    field: ScanDate
+  TypePics:
+    field: IDX
+  Audit:
+    field: Auditkey
+  Crew:
+    pk: Idx
+    field: ModifiedDate
+  CrewActivities:
+    field: IDX
+  CrewShifts:
+    field: IDX
+  JobLogs:
+    pk: IDX
+    field: ChangeDate
+  EQLISTS:
+    pk: Eql_no
+    field: ModDate
+  StockTakeDetails:
+    pk: IDX
+    field: SeenDate
+  

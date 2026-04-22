@@ -1,0 +1,9 @@
+# HireTrack Sync Client - Dependencies
+# Install on Mac/Linux: pip install -r requirements.txt
+
+requests>=2.25.0
+mysql-connector-python>=8.0.0
+PyYAML>=6.0
+# Streaming JSON parser. Keeps client memory flat while pulling million-row
+# tables from the API — buffering the full response would OOM on laptops.
+ijson>=3.2
