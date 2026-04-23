@@ -3,7 +3,12 @@
   hosts: linux
   become: true
   gather_facts: true
+  vars_prompt:
+    - name: tailscale_auth_key
+      prompt: "Tailscale one-time auth key (leave blank if already authenticated)"
+      private: true
+      default: ""
   roles:
     - common
     - docker_host
-
+    - tailscale_host

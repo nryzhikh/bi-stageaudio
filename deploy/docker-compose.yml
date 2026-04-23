@@ -121,19 +121,21 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-    env_file:
-      - .env
+    # Every runtime value is injected explicitly from the compose-level .env
+    # (see deploy/env.*.example). No env_file on the service and no baked-in
+    # defaults in the image: if a value is missing, compose fails to render
+    # instead of silently pointing the worker at the wrong host or db.
     environment:
       # mysql is the in-network service name; never expose 3306 to the
       # internet for this consumer.
       MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      # API_URL, API_USERNAME, API_PASSWORD come from .env. No defaults
-      # because pointing at the wrong host silently pulls nothing and
-      # masks config mistakes.
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?MYSQL_DATABASE is required}
+      MYSQL_USER: ${MYSQL_USER:?MYSQL_USER is required}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      API_URL: ${API_URL:?API_URL is required}
+      API_USERNAME: ${API_USERNAME:?API_USERNAME is required}
+      API_PASSWORD: ${API_PASSWORD:?API_PASSWORD is required}
       TZ: ${TZ:-UTC}
     volumes:
       # Config is edited on the host so schedule/policy tweaks don't need

@@ -1,0 +1,67 @@
+---
+- name: Download Tailscale install script
+  ansible.builtin.get_url:
+    url: "{{ tailscale_install_script_url }}"
+    dest: "{{ tailscale_install_script_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Tailscale
+  ansible.builtin.command: "sh {{ tailscale_install_script_path }}"
+  args:
+    creates: /usr/bin/tailscale
+
+- name: Ensure tailscaled is enabled and started
+  ansible.builtin.systemd:
+    name: tailscaled
+    state: started
+    enabled: true
+
+- name: Check Tailscale authentication state
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Record Tailscale backend state
+  ansible.builtin.set_fact:
+    tailscale_backend_state: "{{ ((tailscale_status.stdout | default('{}')) | from_json).BackendState | default('') }}"
+  when: tailscale_status.rc == 0
+  no_log: true
+
+- name: Record whether Tailscale is authenticated
+  ansible.builtin.set_fact:
+    tailscale_authenticated: "{{ tailscale_status.rc == 0 and (tailscale_backend_state | default('')) == 'Running' }}"
+  no_log: true
+
+- name: Require auth key for first-time Tailscale join
+  ansible.builtin.fail:
+    msg: "This VPS is not authenticated to Tailscale. Re-run bootstrap and provide a one-time auth key."
+  when:
+    - not tailscale_authenticated
+    - tailscale_auth_key | length == 0
+
+- name: Join VPS to Tailscale
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - up
+      - --auth-key
+      - "{{ tailscale_auth_key }}"
+      - --hostname
+      - "{{ tailscale_hostname }}"
+      - "--accept-dns={{ tailscale_accept_dns | bool | ternary('true', 'false') }}"
+  when:
+    - not tailscale_authenticated
+    - tailscale_auth_key | length > 0
+  no_log: true
+
+- name: Verify Tailscale is authenticated
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_verify
+  changed_when: false
+  check_mode: false
+  no_log: true

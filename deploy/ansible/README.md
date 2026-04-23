@@ -3,8 +3,8 @@
 This Ansible scaffold is now bootstrap-only for the Linux production host.
 
 - `bootstrap.yml`
-  Installs base packages, Docker Engine, Docker Compose plugin, and prepares the
-  filesystem layout under `/opt/hiretrack-sync`.
+  Installs base packages, Docker Engine, Docker Compose plugin, Tailscale, and
+  prepares the filesystem layout under `/opt/hiretrack-sync`.
 
 ## Structure
 
@@ -24,6 +24,9 @@ cd deploy/ansible
 ansible-galaxy collection install -r requirements.yml
 ansible-playbook bootstrap.yml
 ```
+
+The bootstrap playbook prompts for a one-time Tailscale auth key. Leave it
+blank on later runs if the VPS is already authenticated.
 
 Runtime deployment is now managed directly from `deploy/docker-compose.yml` and
 `deploy/.env`, not from Ansible group vars or templates.

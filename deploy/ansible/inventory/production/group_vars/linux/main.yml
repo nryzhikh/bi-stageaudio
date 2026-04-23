@@ -2,6 +2,13 @@
 # Bootstrap-only settings for the Linux VPS. Runtime deployment is controlled
 # from deploy/docker-compose.yml and deploy/.env on the host.
 
+# Remote root prepared by bootstrap for the deploy bundle.
+hiretrack_deploy_root: /opt/hiretrack-sync
+
+# Linux user/group that should own the deploy tree.
+hiretrack_owner: "{{ ansible_user }}"
+hiretrack_group: "{{ ansible_user }}"
+
 # Base packages for the VPS.
 hiretrack_bootstrap_packages:
   - apt-transport-https

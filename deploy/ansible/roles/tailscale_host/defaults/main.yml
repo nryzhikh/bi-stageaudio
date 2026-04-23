@@ -1,0 +1,5 @@
+---
+tailscale_install_script_url: https://tailscale.com/install.sh
+tailscale_install_script_path: /tmp/tailscale-install.sh
+tailscale_hostname: "{{ inventory_hostname }}"
+tailscale_accept_dns: true

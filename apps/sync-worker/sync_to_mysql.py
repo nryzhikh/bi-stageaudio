@@ -9,6 +9,7 @@ import csv
 import decimal
 import itertools
 import json
+import logging
 import requests
 import mysql.connector
 from mysql.connector import Error
@@ -17,7 +18,7 @@ import sys
 import argparse
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import ijson
@@ -34,12 +35,16 @@ PRIME_BATCH = 10_000
 STREAM_BATCH = 10_000
 
 # ============ CONFIGURATION ============
-DEFAULT_API_URL = os.environ.get('API_URL', 'http://100.100.139.110:5003')
-DEFAULT_MYSQL_HOST = os.environ.get('MYSQL_HOST', 'localhost')
-DEFAULT_MYSQL_PORT = int(os.environ.get('MYSQL_PORT', 3306))
-DEFAULT_MYSQL_USER = os.environ.get('MYSQL_USER', 'hiretrack')
-DEFAULT_MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD', 'hiretrack123')
-DEFAULT_MYSQL_DATABASE = os.environ.get('MYSQL_DATABASE', 'hiretrack')
+# All connection info is read from the environment so the container has a
+# single config source (docker compose `environment:`). No baked-in secrets
+# or hosts: missing values should fail loudly rather than silently pointing
+# at the wrong database or API.
+DEFAULT_API_URL = os.environ.get('API_URL')
+DEFAULT_MYSQL_HOST = os.environ.get('MYSQL_HOST')
+DEFAULT_MYSQL_PORT = int(os.environ.get('MYSQL_PORT', '3306'))
+DEFAULT_MYSQL_USER = os.environ.get('MYSQL_USER')
+DEFAULT_MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD')
+DEFAULT_MYSQL_DATABASE = os.environ.get('MYSQL_DATABASE')
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..'))
@@ -48,6 +53,67 @@ DEFAULT_STATE_PATH = os.path.join(REPO_ROOT, 'var', 'runtime', 'sync_state.json'
 DEFAULT_REPORT_PATH = os.path.join(REPO_ROOT, 'var', 'artifacts', 'sync_report.csv')
 SYNC_STATE_TABLE = '_sync_table_state'
 SYNC_RUN_LOCK_NAME = 'hiretrack_sync_run'
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
+LOG_FORMAT = os.environ.get('LOG_FORMAT', 'json')
+
+LOGGER = logging.getLogger('hiretrack.sync_worker')
+_LOG_RECORD_DEFAULTS = set(logging.makeLogRecord({}).__dict__)
+
+
+class JsonLogFormatter(logging.Formatter):
+    """Emit structured JSON logs using only the standard logging package."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: Dict[str, Any] = {
+            'timestamp': datetime.fromtimestamp(record.created, timezone.utc).isoformat(timespec='milliseconds'),
+            'level': record.levelname,
+            'logger': record.name,
+            'message': record.getMessage(),
+        }
+        if record.exc_info:
+            payload['exception'] = self.formatException(record.exc_info)
+        for key, value in record.__dict__.items():
+            if key not in _LOG_RECORD_DEFAULTS and key not in payload:
+                payload[key] = self._json_safe(value)
+        return json.dumps(payload, default=str, sort_keys=True)
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, (list, tuple)):
+            return [JsonLogFormatter._json_safe(v) for v in value]
+        if isinstance(value, dict):
+            return {str(k): JsonLogFormatter._json_safe(v) for k, v in value.items()}
+        return str(value)
+
+
+class TextLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        fields = []
+        for key, value in sorted(record.__dict__.items()):
+            if key not in _LOG_RECORD_DEFAULTS:
+                fields.append(f'{key}={value!r}')
+        if fields:
+            return f'{base} {" ".join(fields)}'
+        return base
+
+
+def configure_logging(level: str = LOG_LEVEL, log_format: str = LOG_FORMAT) -> None:
+    handler = logging.StreamHandler()
+    if log_format == 'text':
+        handler.setFormatter(TextLogFormatter('%(asctime)s %(levelname)s %(name)s %(message)s'))
+    else:
+        handler.setFormatter(JsonLogFormatter())
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+
+
+def log_event(level: int, event: str, message: str, **fields: Any) -> None:
+    LOGGER.log(level, message, extra={'event': event, **fields})
 
 
 def load_sync_config(path: str) -> Dict[str, Any]:
@@ -411,7 +477,17 @@ class HireTrackMySQLSync:
 
             if attempt < retries - 1:
                 wait_time = (attempt + 1) * 5  # 5, 10, 15 seconds
-                print(f"   ⚠️  Retry {attempt + 1}/{retries} in {wait_time}s...")
+                log_event(
+                    logging.WARNING,
+                    'api_request_retry',
+                    'API request failed; retrying',
+                    endpoint=endpoint,
+                    method=method,
+                    attempt=attempt + 1,
+                    max_attempts=retries,
+                    wait_seconds=wait_time,
+                    error=last_error,
+                )
                 time.sleep(wait_time)
 
         return {"error": str(last_error)}
@@ -428,14 +504,27 @@ class HireTrackMySQLSync:
             conn.close()
             return True
         except Error as e:
-            print(f"MySQL connection error: {e}")
+            log_event(
+                logging.ERROR,
+                'mysql_connection_failed',
+                'MySQL connection failed',
+                host=self.mysql_config['host'],
+                port=self.mysql_config['port'],
+                database=self.mysql_config['database'],
+                error=str(e),
+            )
             return False
     
     def get_tables(self) -> List[str]:
         """Get list of all tables from API"""
         result = self.api_request('/api/tables')
         if 'error' in result:
-            print(f"Error getting tables: {result['error']}")
+            log_event(
+                logging.ERROR,
+                'table_list_failed',
+                'Failed to get table list from API',
+                error=result['error'],
+            )
             return []
         return result.get('tables', [])
     
@@ -716,16 +805,23 @@ class HireTrackMySQLSync:
 
         if inc_field:
             metrics["mode"] = "incremental" if last_watermark is not None else "incremental-initial"
-            print(f"\n📋 Syncing: {table_name}  [{metrics['mode']}"
-                  + (f" since {inc_field} > {last_watermark!r}" if last_watermark is not None else "")
-                  + "]")
         else:
-            print(f"\n📋 Syncing: {table_name}  [full]")
+            metrics["mode"] = "full"
+        log_event(
+            logging.INFO,
+            'sync_table_started',
+            'Table sync started',
+            table=table_name,
+            mode=metrics['mode'],
+            incremental_field=inc_field,
+            incremental_pk=inc_pk,
+            last_watermark=last_watermark,
+        )
 
         # --- Open the stream. Pre-stream failures (auth, 500 before body)
         # land on response.ok == False; parse the JSON error body so the
         # message matches what non-streaming callers see.
-        print("   Opening stream...", end='\r')
+        log_event(logging.INFO, 'table_stream_opening', 'Opening table stream', table=table_name)
         t0 = time.perf_counter()
         try:
             response = self._open_table_stream(
@@ -735,7 +831,13 @@ class HireTrackMySQLSync:
             )
         except requests.exceptions.RequestException as e:
             metrics["error"] = str(e)[:200]
-            print(f"   ✗ Connection error: {e}")
+            log_event(
+                logging.ERROR,
+                'table_stream_connection_failed',
+                'Table stream connection failed',
+                table=table_name,
+                error=str(e),
+            )
             return metrics
 
         if not response.ok:
@@ -745,7 +847,14 @@ class HireTrackMySQLSync:
             except ValueError:
                 err = response.text[:500] or f"HTTP {response.status_code}"
             metrics["error"] = f"HTTP {response.status_code}: {err}"[:200]
-            print(f"   ✗ {metrics['error']}")
+            log_event(
+                logging.ERROR,
+                'table_stream_http_failed',
+                'Table stream returned an HTTP error',
+                table=table_name,
+                status_code=response.status_code,
+                error=metrics['error'],
+            )
             response.close()
             return metrics
 
@@ -755,14 +864,25 @@ class HireTrackMySQLSync:
             table_stream = TableStream(response)
         except Exception as e:
             metrics["error"] = f"Stream init failed: {e}"[:200]
-            print(f"   ✗ {metrics['error']}")
+            log_event(
+                logging.ERROR,
+                'table_stream_parse_failed',
+                'Failed to initialize table stream parser',
+                table=table_name,
+                error=metrics['error'],
+            )
             response.close()
             return metrics
 
         columns = table_stream.columns
         if not columns:
             metrics["error"] = "no columns"
-            print("   ✗ No columns in response")
+            log_event(
+                logging.ERROR,
+                'table_stream_no_columns',
+                'Table stream response did not include columns',
+                table=table_name,
+            )
             table_stream.close()
             return metrics
 
@@ -776,9 +896,15 @@ class HireTrackMySQLSync:
         if stream_exhausted and table_stream.trailer.get('error'):
             err = str(table_stream.trailer['error'])[:200]
             partial = len(primer)
-            print(f"   ✗ Server error: {err}"
-                  + (f"  (discarded {partial} partial rows)" if partial else ""))
             metrics["error"] = err + (f" [partial={partial}]" if partial else "")
+            log_event(
+                logging.ERROR,
+                'table_stream_server_failed',
+                'Table stream ended with a server error',
+                table=table_name,
+                partial_rows=partial,
+                error=err,
+            )
             table_stream.close()
             return metrics
 
@@ -786,13 +912,29 @@ class HireTrackMySQLSync:
             # Nothing to write. For incremental, keep the old watermark; for full
             # refresh, the existing table (if any) stays intact because we never
             # reached the DROP.
-            print(f"   ⏭️  Nothing new to write (in {metrics['fetch_sec']:.1f}s)")
             metrics["ok"] = True
             metrics["watermark"] = last_watermark if incremental else None
+            log_event(
+                logging.INFO,
+                'sync_table_empty',
+                'Table sync had no rows to write',
+                table=table_name,
+                mode=metrics['mode'],
+                fetch_seconds=round(metrics['fetch_sec'], 3),
+                watermark=metrics['watermark'],
+            )
             table_stream.close()
             return metrics
 
-        print(f"   Primed {len(primer)} rows in {metrics['fetch_sec']:.1f}s    ")
+        log_event(
+            logging.INFO,
+            'sync_table_primed',
+            'Table stream schema sample loaded',
+            table=table_name,
+            primer_rows=len(primer),
+            fetch_seconds=round(metrics['fetch_sec'], 3),
+            columns=len(columns),
+        )
 
         cursor = conn.cursor()
         rows_written = 0
@@ -844,7 +986,15 @@ class HireTrackMySQLSync:
                 )
                 conn.commit()
                 rows_written += len(batch)
-                print(f"   Inserted: {rows_written} rows   ", end='\r')
+                log_event(
+                    logging.INFO,
+                    'sync_table_batch_inserted',
+                    'Table sync batch inserted',
+                    table=table_name,
+                    mode=metrics['mode'],
+                    rows_written=rows_written,
+                    batch_rows=len(batch),
+                )
 
             flush(primer)
             primer = []  # release the prime buffer before pulling the tail
@@ -869,9 +1019,15 @@ class HireTrackMySQLSync:
             trailer_error = table_stream.trailer.get('error')
             if trailer_error:
                 err = str(trailer_error)[:200]
-                print(f"\n   ✗ Stream ended with error: {err}  "
-                      f"(committed {rows_written} rows before failure)")
                 metrics["error"] = f"{err} [partial={rows_written}]"
+                log_event(
+                    logging.ERROR,
+                    'table_stream_server_failed',
+                    'Table stream ended with a server error after partial writes',
+                    table=table_name,
+                    rows_written=rows_written,
+                    error=err,
+                )
                 # Do NOT advance watermark — next run replays from the same
                 # starting point so we don't permanently skip missing rows.
                 return metrics
@@ -900,20 +1056,39 @@ class HireTrackMySQLSync:
                 self.swap_full_refresh_tables(cursor, table_name, target_table)
                 conn.commit()
 
-            print(f"\n   ✓ Saved {rows_written} rows in {metrics['insert_sec']:.1f}s    ")
             metrics["watermark"] = max_watermark if inc_field else None
             metrics["ok"] = True
             metrics["state_written"] = state_written
+            log_event(
+                logging.INFO,
+                'sync_table_completed',
+                'Table sync completed',
+                table=table_name,
+                mode=metrics['mode'],
+                rows=rows_written,
+                fetch_seconds=round(metrics['fetch_sec'], 3),
+                insert_seconds=round(metrics['insert_sec'], 3),
+                watermark=metrics['watermark'],
+                state_written=state_written,
+            )
             return metrics
 
         except Error as e:
-            print(f"\n   ✗ MySQL Error: {e}  (committed {rows_written} rows)")
             try:
                 conn.rollback()
             except Error:
                 pass
             metrics["error"] = f"{str(e)[:200]} [partial={rows_written}]"
             metrics["rows"] = rows_written
+            log_event(
+                logging.ERROR,
+                'sync_table_mysql_failed',
+                'MySQL error while syncing table',
+                table=table_name,
+                mode=metrics['mode'],
+                rows_written=rows_written,
+                error=str(e),
+            )
             return metrics
         finally:
             cursor.close()
@@ -937,48 +1112,67 @@ class HireTrackMySQLSync:
             full_refresh: Ignore incremental config — drop and reload every table
             lock_timeout: Seconds to wait for the MySQL advisory run lock
         """
-        print("=" * 50)
-        print("HireTrack Database Sync to MySQL")
-        print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"API: {self.api_url}")
-        print(f"MySQL: {self.mysql_config['host']}:{self.mysql_config['port']}/{self.mysql_config['database']}")
-        print("=" * 50)
+        started_at = datetime.now()
+        log_event(
+            logging.INFO,
+            'sync_run_started',
+            'Sync run started',
+            api_url=self.api_url,
+            mysql_host=self.mysql_config['host'],
+            mysql_port=self.mysql_config['port'],
+            mysql_database=self.mysql_config['database'],
+            started_at=started_at.isoformat(timespec='seconds'),
+            config_path=config_path,
+            report_path=report_path,
+            full_refresh=full_refresh,
+            start_index=start_index,
+        )
         
         # Test connections
-        print("\n🔌 Testing API connection...")
+        log_event(logging.INFO, 'api_connection_check_started', 'Checking API connection')
         if not self.check_api_connection():
-            print("✗ Cannot connect to API")
+            log_event(logging.ERROR, 'api_connection_check_failed', 'API connection check failed')
             return {"success": False, "error": "API connection failed"}
-        print("✓ API connected")
+        log_event(logging.INFO, 'api_connection_check_ok', 'API connection check succeeded')
         
-        print("\n🔌 Testing MySQL connection...")
+        log_event(logging.INFO, 'mysql_connection_check_started', 'Checking MySQL connection')
         if not self.check_mysql_connection():
-            print("✗ Cannot connect to MySQL")
+            log_event(logging.ERROR, 'mysql_connection_check_failed', 'MySQL connection check failed')
             return {"success": False, "error": "MySQL connection failed"}
-        print("✓ MySQL connected")
+        log_event(logging.INFO, 'mysql_connection_check_ok', 'MySQL connection check succeeded')
         
         # Load policy
         cfg = load_sync_config(config_path)
         skip_set = set(cfg["skip"])
         incremental_cfg = {} if full_refresh else cfg["incremental"]
-        print(f"\n📂 Config: {config_path}  "
-              f"(skip={len(skip_set)}, incremental={len(incremental_cfg)})")
+        log_event(
+            logging.INFO,
+            'sync_config_loaded',
+            'Sync config loaded',
+            config_path=config_path,
+            skip_count=len(skip_set),
+            incremental_count=len(incremental_cfg),
+        )
 
         # Get tables
         if tables is None:
-            print("\n📊 Fetching table list...")
+            log_event(logging.INFO, 'table_list_fetch_started', 'Fetching table list from API')
             tables = self.get_tables()
 
         exclude_set = set(exclude or []) | skip_set
         dropped = [t for t in tables if t in exclude_set]
         tables = [t for t in tables if t not in exclude_set]
         if dropped:
-            preview = ', '.join(sorted(dropped)[:8])
-            extra = f" (+{len(dropped) - 8} more)" if len(dropped) > 8 else ""
-            print(f"⏭️  Skipping {len(dropped)} config/excluded tables: {preview}{extra}")
+            log_event(
+                logging.INFO,
+                'tables_excluded',
+                'Excluded configured tables from sync run',
+                excluded_count=len(dropped),
+                excluded_preview=sorted(dropped)[:8],
+            )
 
         if not tables:
-            print("✗ No tables to sync")
+            log_event(logging.ERROR, 'sync_run_no_tables', 'No tables to sync')
             return {"success": False, "error": "No tables"}
 
         total_tables = len(tables)
@@ -986,31 +1180,65 @@ class HireTrackMySQLSync:
         # Apply start_index to resume from a specific point
         if start_index > 0:
             if start_index >= len(tables):
-                print(f"✗ Start index {start_index} is out of range (max: {len(tables) - 1})")
+                log_event(
+                    logging.ERROR,
+                    'sync_run_invalid_start_index',
+                    'Start index is out of range',
+                    start_index=start_index,
+                    max_index=len(tables) - 1,
+                )
                 return {"success": False, "error": "Invalid start index"}
-            print(f"⏭️  Resuming from index {start_index} (skipping first {start_index} tables)")
+            log_event(
+                logging.INFO,
+                'sync_run_resume',
+                'Resuming sync run from start index',
+                start_index=start_index,
+                skipped_tables=start_index,
+            )
             tables = tables[start_index:]
 
-        print(f"✓ {len(tables)} tables to sync" + (f" (of {total_tables} total)" if start_index > 0 else ""))
+        log_event(
+            logging.INFO,
+            'sync_run_tables_selected',
+            'Tables selected for sync run',
+            selected_tables=len(tables),
+            total_tables=total_tables,
+            start_index=start_index,
+        )
 
         conn = mysql.connector.connect(**self.mysql_config)
         lock_acquired = False
         try:
-            print(f"🔒 Acquiring run lock: {self.build_run_lock_name()} (timeout={lock_timeout}s)")
+            lock_name = self.build_run_lock_name()
+            log_event(
+                logging.INFO,
+                'sync_run_lock_acquire_started',
+                'Acquiring sync run lock',
+                lock_name=lock_name,
+                lock_timeout_seconds=lock_timeout,
+            )
             lock_acquired = self.acquire_run_lock(conn, lock_timeout)
             if not lock_acquired:
-                print("✗ Another sync run is already in progress; exiting without overlap")
+                log_event(
+                    logging.WARNING,
+                    'sync_run_lock_busy',
+                    'Another sync run is already in progress',
+                    lock_name=lock_name,
+                )
                 return {"success": False, "error": "sync already running"}
-            print("✓ Run lock acquired")
+            log_event(logging.INFO, 'sync_run_lock_acquired', 'Sync run lock acquired', lock_name=lock_name)
 
             self.ensure_metadata_tables(conn)
             imported = self.import_legacy_state(conn, state_path)
             state = self.load_table_states(conn)
-            print(
-                f"📂 State : mysql.`{SYNC_STATE_TABLE}`  "
-                f"({len(state)} watermarks loaded"
-                + (f", imported {imported} from {state_path}" if imported else "")
-                + ")"
+            log_event(
+                logging.INFO,
+                'sync_state_loaded',
+                'Sync state loaded',
+                state_table=SYNC_STATE_TABLE,
+                watermarks_loaded=len(state),
+                legacy_imported=imported,
+                legacy_state_path=state_path if imported else None,
             )
 
             # Sync
@@ -1021,9 +1249,17 @@ class HireTrackMySQLSync:
             all_metrics: List[Dict[str, Any]] = []
             for i, table in enumerate(tables, 1):
                 global_idx = i + start_index
-                print(f"\n[{global_idx}/{total_tables}]", end="")
                 inc_policy = incremental_cfg.get(table)
                 table_state = state.get(table) if inc_policy else None
+                log_event(
+                    logging.INFO,
+                    'sync_run_table_started',
+                    'Starting table within sync run',
+                    table=table,
+                    table_index=global_idx,
+                    total_tables=total_tables,
+                    incremental=bool(inc_policy),
+                )
                 m = self.sync_table(conn, table, incremental=inc_policy, state=table_state)
                 all_metrics.append(m)
                 if m["ok"]:
@@ -1044,7 +1280,12 @@ class HireTrackMySQLSync:
                 try:
                     self.release_run_lock(conn)
                 except Error as e:
-                    print(f"\n⚠️  Could not release run lock cleanly: {e}")
+                    log_event(
+                        logging.WARNING,
+                        'sync_run_lock_release_failed',
+                        'Could not release sync run lock cleanly',
+                        error=str(e),
+                    )
             conn.close()
 
         # Write the per-table timing report. Pairs with tools/hiretrack-ops/
@@ -1057,34 +1298,59 @@ class HireTrackMySQLSync:
                 w.writeheader()
                 for m in all_metrics:
                     w.writerow(m)
-            print(f"\n📝 Timing report: {report_path}")
+            log_event(
+                logging.INFO,
+                'sync_report_written',
+                'Sync timing report written',
+                report_path=report_path,
+                table_count=len(all_metrics),
+            )
         except Exception as e:
-            print(f"\n⚠️  Could not write {report_path}: {e}")
+            log_event(
+                logging.WARNING,
+                'sync_report_write_failed',
+                'Could not write sync timing report',
+                report_path=report_path,
+                error=str(e),
+            )
         
         # Summary
-        print("\n" + "=" * 50)
-        print("SYNC COMPLETE")
-        print(f"✓ Success: {success}")
         if failed:
-            print(f"✗ Failed: {failed}")
-            print(f"\nFailed tables:")
-            for t in failed_tables:
-                print(f"   - {t}")
-            print(f"\nTo retry failed tables only:")
             tables_arg = ' '.join(failed_tables)
-            print(f"   python apps/sync-worker/sync_to_mysql.py --tables {tables_arg}")
+            log_event(
+                logging.ERROR,
+                'sync_run_failed_tables',
+                'One or more tables failed to sync',
+                failed=failed,
+                failed_tables=failed_tables,
+                retry_command=f'python apps/sync-worker/sync_to_mysql.py --tables {tables_arg}',
+            )
         
         # Show resume hint if interrupted mid-sync
         next_index = start_index + success + failed
+        resume_command = None
         if next_index < total_tables:
-            print(f"\n💡 To resume from current position (if interrupted):")
-            print(f"   python apps/sync-worker/sync_to_mysql.py --start-index {next_index}")
-        print(f"\nFinished: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("=" * 50)
-        
-        print("\n📖 Connect to MySQL:")
-        print(f"   mysql -h {self.mysql_config['host']} -P {self.mysql_config['port']} -u {self.mysql_config['user']} -p {self.mysql_config['database']}")
-        print("\n   Or open Adminer: http://localhost:8080")
+            resume_command = f'python apps/sync-worker/sync_to_mysql.py --start-index {next_index}'
+
+        finished_at = datetime.now()
+        log_event(
+            logging.INFO if failed == 0 else logging.WARNING,
+            'sync_run_completed',
+            'Sync run completed',
+            success=success,
+            failed=failed,
+            failed_tables=failed_tables,
+            total_tables=total_tables,
+            next_index=next_index,
+            resume_command=resume_command,
+            started_at=started_at.isoformat(timespec='seconds'),
+            finished_at=finished_at.isoformat(timespec='seconds'),
+            duration_seconds=round((finished_at - started_at).total_seconds(), 3),
+            mysql_host=self.mysql_config['host'],
+            mysql_port=self.mysql_config['port'],
+            mysql_database=self.mysql_config['database'],
+            adminer_url='http://localhost:8080',
+        )
         
         return {"success": True, "synced": success, "failed": failed, "failed_tables": failed_tables}
 
@@ -1117,12 +1383,30 @@ def main():
                         help='API password (if auth enabled)')
     parser.add_argument('--report', default=DEFAULT_REPORT_PATH,
                         help='CSV path for per-table timing report')
+    parser.add_argument('--log-level', default=LOG_LEVEL,
+                        help='Python logging level (default: %(default)s)')
+    parser.add_argument('--log-format', default=LOG_FORMAT, choices=['json', 'text'],
+                        help='Log output format (default: %(default)s)')
     
     args = parser.parse_args()
-    
-    api_auth = None
-    if args.api_user and args.api_password:
-        api_auth = (args.api_user, args.api_password)
+    configure_logging(args.log_level, args.log_format)
+
+    # Fail fast if compose (or the operator) forgot to wire a required value.
+    # Keeps misconfig from degrading into a partial / wrong-target sync.
+    required = {
+        '--api / API_URL': args.api,
+        '--host / MYSQL_HOST': args.host,
+        '--user / MYSQL_USER': args.user,
+        '--password / MYSQL_PASSWORD': args.password,
+        '--database / MYSQL_DATABASE': args.database,
+        '--api-user / API_USERNAME': args.api_user,
+        '--api-password / API_PASSWORD': args.api_password,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        parser.error('missing required config (set via env or flag): ' + ', '.join(missing))
+
+    api_auth = (args.api_user, args.api_password)
     
     client = HireTrackMySQLSync(
         api_url=args.api,
