@@ -1,6 +1,12 @@
 .DS_Store
+# Ignore every .env / .env.* anywhere in the tree. Committing secrets is a
+# rotation emergency; a broad ignore rule is the cheapest prevention.
 .env
-deploy/.env
+.env.*
+!.env.example
+!*.env.example
+!env.example
+!env.*.example
 venv/
 venv
 **/__pycache__/
@@ -22,3 +28,4 @@ trash/
 
 # Ansible Galaxy collections are installed from requirements.yml, not vendored.
 apps/api/ansible/collections/ansible_collections/
+

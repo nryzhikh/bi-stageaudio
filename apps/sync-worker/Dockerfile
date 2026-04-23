@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # -----------------------------------------------------------------------------
-# HireTrack sync client — one-shot worker container that drains the Flask API on
+# HireTrack sync worker — one-shot worker container that drains the Flask API on
 # the Windows host into the MySQL service in this compose stack.
 #
-# Scheduling is handled by host-side systemd timers that run:
-#   docker compose run --rm sync-client [full-refresh]
-# This keeps the container single-purpose: run a sync, write logs, exit.
+# Scheduling is handled by the Compose-managed Ofelia scheduler, which launches:
+#   docker compose --profile manual run --rm sync-worker [full-refresh]
+# The container stays single-purpose: run a sync, write logs, exit.
 # -----------------------------------------------------------------------------
 FROM python:3.12-slim
 

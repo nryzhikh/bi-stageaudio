@@ -1,15 +1,69 @@
 ---
-- name: Install Docker Engine and Compose plugin
+# Install Docker Engine + CLI + containerd + plugins from Docker's upstream
+# APT repository (download.docker.com). Stock Ubuntu/Debian repos do not ship
+# `docker-compose-plugin` and `docker.io` conflicts with `docker-ce`, so we
+# remove Distro docker bits first and then wire in the upstream repo.
+#
+# Reference: https://docs.docker.com/engine/install/ubuntu/
+#            https://docs.docker.com/engine/install/debian/
+
+- name: Remove conflicting distro docker packages
   ansible.builtin.apt:
-    name:
-      - docker.io
-      - docker-compose-plugin
+    name: "{{ docker_host_conflicting_packages }}"
+    state: absent
+    purge: true
+
+- name: Ensure apt keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Docker apt signing key
+  ansible.builtin.get_url:
+    url: "{{ docker_host_apt_key_url }}"
+    dest: "{{ docker_host_apt_key_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+
+- name: Configure Docker apt repository (deb822)
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "{{ docker_host_apt_repo_uri }}"
+    suites: ["{{ ansible_facts['distribution_release'] }}"]
+    components: "{{ docker_host_apt_components }}"
+    architectures: ["{{ 'amd64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture'] }}"]
+    signed_by: "{{ docker_host_apt_key_path }}"
+    state: present
+    enabled: true
+  register: docker_host_repo
+
+- name: Refresh apt cache when repo changed
+  ansible.builtin.apt:
+    update_cache: true
+  when: docker_host_repo.changed
+
+- name: Install Docker Engine, CLI, containerd, and official plugins
+  ansible.builtin.apt:
+    name: "{{ docker_host_packages }}"
     state: present
     update_cache: true
+    cache_valid_time: 3600
 
 - name: Ensure Docker service is enabled and started
   ansible.builtin.systemd:
     name: docker
+    state: started
+    enabled: true
+
+- name: Ensure containerd service is enabled and started
+  ansible.builtin.systemd:
+    name: containerd
     state: started
     enabled: true
 
@@ -18,4 +72,10 @@
     name: "{{ hiretrack_owner }}"
     groups: docker
     append: true
+  notify: Restart docker
 
+- name: Verify docker compose plugin is available
+  ansible.builtin.command: docker compose version
+  register: docker_host_compose_check
+  changed_when: false
+  check_mode: false

@@ -1,4 +1,8 @@
 ---
+# Pin major versions so CI and local runs behave identically.
+# Bump deliberately after reading the changelog.
 collections:
   - name: ansible.posix
+    version: ">=2.0.0,<3.0.0"
   - name: community.general
+    version: ">=10.0.0,<13.0.0"

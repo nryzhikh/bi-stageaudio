@@ -1,0 +1,26 @@
+---
+# Docker Engine + plugins from the upstream repo (download.docker.com).
+# Override per-host/group in inventory vars if needed.
+docker_host_apt_key_url: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}/gpg"
+docker_host_apt_key_path: /etc/apt/keyrings/docker.asc
+docker_host_apt_repo_uri: "https://download.docker.com/linux/{{ ansible_facts['distribution'] | lower }}"
+docker_host_apt_components: [stable]
+
+# Standard Docker Engine + CLI + containerd + official plugins.
+docker_host_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Distro packages that conflict with the upstream docker-ce install.
+# Removed idempotently; safe if they were never installed.
+docker_host_conflicting_packages:
+  - docker.io
+  - docker-doc
+  - docker-compose
+  - docker-compose-v2
+  - podman-docker
+  - containerd
+  - runc

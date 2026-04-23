@@ -1,21 +1,6 @@
 ---
-# Remote checkout root used by systemd units and docker compose.
-hiretrack_deploy_root: /opt/hiretrack-sync
-
-# Local runtime deploy bundle on the Ansible controller.
-hiretrack_local_deploy_bundle_root: "{{ playbook_dir }}/.."
-
-# Linux user/group that should own the checkout.
-hiretrack_owner: "{{ ansible_user }}"
-hiretrack_group: "{{ ansible_user }}"
-
-# Long-running compose services.
-hiretrack_compose_services:
-  - mysql
-  - adminer
-  - superset
-  - metabase
-  - caddy
+# Bootstrap-only settings for the Linux VPS. Runtime deployment is controlled
+# from deploy/docker-compose.yml and deploy/.env on the host.
 
 # Base packages for the VPS.
 hiretrack_bootstrap_packages:
@@ -29,25 +14,13 @@ hiretrack_bootstrap_packages:
   - ufw
 
 # UFW ports to open publicly on the VPS.
+# NOTE: exposing adminer (8080), superset (8088), metabase (3000), and Ofelia
+# logs/UI-adjacent traffic should be scoped in the provider firewall if possible.
+# Re-enable caddy via docker compose when DNS is ready.
 hiretrack_public_tcp_ports:
   - 22
   - 80
   - 443
-
-# Compose environment values.
-hiretrack_mysql_root_password: rootpass123
-hiretrack_mysql_database: hiretrack
-hiretrack_mysql_user: hiretrack
-hiretrack_mysql_password: hiretrack123
-hiretrack_api_url: http://100.100.139.110:5003
-hiretrack_api_username: ""
-hiretrack_api_password: ""
-hiretrack_sync_client_image: ghcr.io/shparenkov/python-daybook-sync-client:latest
-hiretrack_superset_secret_key: change-me
-hiretrack_timezone: UTC
-
-# Timer defaults. Use absolute calendar expressions in the templates.
-hiretrack_sync_randomized_delay_sec: 120
-hiretrack_full_refresh_randomized_delay_sec: 900
-hiretrack_sync_lock_timeout: 0
-hiretrack_full_refresh_lock_timeout: 0
+  - 3000
+  - 8080
+  - 8088

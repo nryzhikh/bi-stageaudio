@@ -3,8 +3,8 @@
 This repo now deploys in two parts:
 
 - Windows: Flask API next to NexusDB
-- Linux VPS: Docker Compose stack plus host-side `systemd` timers that launch
-  one-shot sync worker containers
+- Linux VPS: Docker Compose stack with Ofelia scheduling one-shot sync worker
+  containers
 
 ## 1. Windows API
 
@@ -41,12 +41,15 @@ Expected checkout path:
 
 ```bash
 cd /opt/hiretrack-sync/deploy
-cp env.example .env
+cp env.production.example .env
 $EDITOR .env
 ```
 
 Set:
 
+- `COMPOSE_PROJECT_NAME`
+- `COMPOSE_PROFILES`
+- `DEPLOY_WORKDIR`
 - `API_URL`
 - `API_USERNAME` / `API_PASSWORD` if needed
 - `SYNC_CLIENT_IMAGE`
@@ -55,17 +58,27 @@ Set:
 - `MYSQL_USER`
 - `MYSQL_PASSWORD`
 - `SUPERSET_SECRET_KEY`
+- `TZ`
 
-### Start long-running services
+### Start the stack
 
 ```bash
 cd /opt/hiretrack-sync/deploy
-docker compose up -d mysql adminer superset metabase caddy
+docker compose up -d mysql adminer superset metabase scheduler-runner ofelia
 ```
 
-The sync worker is not started with `docker compose up`. It is a one-shot job.
-The VPS only needs the `deploy/` runtime bundle plus the prebuilt sync-worker
-image referenced by `SYNC_CLIENT_IMAGE`.
+Set `COMPOSE_PROFILES=proxy` in `.env` if you want Caddy enabled in the normal
+startup path. You can still override it ad hoc:
+
+```bash
+cd /opt/hiretrack-sync/deploy
+docker compose --profile proxy up -d
+```
+
+The sync worker is not started with `docker compose up`. It stays a one-shot
+job definition, and Ofelia schedules `docker compose run --rm sync-worker ...`
+against this same compose file. The VPS only needs the `deploy/` runtime bundle
+plus the prebuilt sync-worker image referenced by `SYNC_CLIENT_IMAGE`.
 
 ## 3. Sync Worker Execution Model
 
@@ -73,74 +86,75 @@ Incremental run:
 
 ```bash
 cd /opt/hiretrack-sync/deploy
-docker compose run --rm sync-client
+docker compose --profile manual run --rm sync-worker
 ```
 
 Full refresh:
 
 ```bash
 cd /opt/hiretrack-sync/deploy
-docker compose run --rm sync-client full-refresh
+docker compose --profile manual run --rm sync-worker full-refresh
 ```
 
 Selected tables:
 
 ```bash
 cd /opt/hiretrack-sync/deploy
-docker compose run --rm sync-client --tables JOBS EQLISTS
+docker compose --profile manual run --rm sync-worker --tables JOBS EQLISTS
 ```
 
-## 4. Install systemd Timers
+Ofelia schedules two jobs from labels on `scheduler-runner`:
 
-Copy the provided units:
+- incremental sync every 15 minutes
+- full refresh every Sunday at 03:00 UTC
+
+## 4. Operations
+
+Validate the compose config:
 
 ```bash
-sudo cp /opt/hiretrack-sync/deploy/systemd/hiretrack-sync.service /etc/systemd/system/
-sudo cp /opt/hiretrack-sync/deploy/systemd/hiretrack-sync.timer /etc/systemd/system/
-sudo cp /opt/hiretrack-sync/deploy/systemd/hiretrack-sync-full-refresh.service /etc/systemd/system/
-sudo cp /opt/hiretrack-sync/deploy/systemd/hiretrack-sync-full-refresh.timer /etc/systemd/system/
+cd /opt/hiretrack-sync/deploy
+docker compose config -q
 ```
 
-Enable them:
+Check the scheduler:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now hiretrack-sync.timer
-sudo systemctl enable --now hiretrack-sync-full-refresh.timer
+cd /opt/hiretrack-sync/deploy
+docker compose ps ofelia scheduler-runner
+docker compose logs -f ofelia
 ```
 
-Check them:
+Run a sync immediately:
 
 ```bash
-systemctl list-timers 'hiretrack-sync*'
-systemctl status hiretrack-sync.timer
-systemctl status hiretrack-sync-full-refresh.timer
+cd /opt/hiretrack-sync/deploy
+docker compose --profile manual run --rm sync-worker
 ```
 
-## 5. Operations
-
-Run immediately:
+Run a full refresh immediately:
 
 ```bash
-sudo systemctl start hiretrack-sync.service
-sudo systemctl start hiretrack-sync-full-refresh.service
+cd /opt/hiretrack-sync/deploy
+docker compose --profile manual run --rm sync-worker full-refresh
 ```
 
-Logs:
+Pause or resume scheduling:
 
 ```bash
-journalctl -u hiretrack-sync.service -n 200 --no-pager
-journalctl -u hiretrack-sync-full-refresh.service -n 200 --no-pager
+cd /opt/hiretrack-sync/deploy
+docker compose stop ofelia
+docker compose start ofelia
 ```
 
 Compose service logs:
 
 ```bash
 cd /opt/hiretrack-sync/deploy
-docker compose logs -f mysql superset
+docker compose logs -f mysql superset metabase
 ```
 
-## 6. Data Safety Model
+## 5. Data Safety Model
 
 - Incremental sync writes into a temp staging table, then merges into the live
   table and updates `_sync_table_state` together.
@@ -149,7 +163,6 @@ docker compose logs -f mysql superset
 - Watermarks are stored in MySQL metadata table `_sync_table_state`, not in a
   JSON file.
 
-## 7. Suggested Next Hardening Step
-
-Add a database-backed run lock so two manual or scheduled executions cannot
-overlap.
+Scheduled runs use Ofelia's `no-overlap` option, and the worker itself still
+uses the MySQL advisory run lock via `--lock-timeout 0`, so overlap protection
+exists at both the scheduler and application layers.

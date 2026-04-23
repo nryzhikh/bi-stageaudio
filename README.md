@@ -13,13 +13,12 @@ Windows Server                      Linux VPS
 │                         │         │ - superset                        │
 │ ODBC -> NexusDB         │         │ - adminer / metabase / caddy      │
 └─────────────────────────┘         │                                    │
-                                    │ systemd timers                     │
-                                    │ - hiretrack-sync.timer            │
-                                    │ - hiretrack-sync-full-refresh.timer│
+                                    │ ofelia scheduler                   │
+                                    │ - runs scheduled compose jobs      │
                                     │                                    │
                                     │ one-shot worker container          │
                                     │ - docker compose run --rm          │
-                                    │   sync-client [full-refresh]       │
+                                    │   sync-worker [full-refresh]       │
                                     └────────────────────────────────────┘
 ```
 
@@ -31,8 +30,8 @@ apps/
   sync-worker/          One-shot sync worker container
 deploy/
   docker-compose.yml    Linux VPS stack
-  env.example           Compose environment file template
-  systemd/              Host timer/service units for sync scheduling
+  env.local.example     Local compose environment template
+  env.production.example Production compose environment template
 tools/hiretrack-ops/    Operator-only discovery and one-off scripts
 ```
 
@@ -47,7 +46,7 @@ Copy `apps/api/` to the Windows host and install it as a service. See
 
 ```bash
 cd deploy
-cp env.example .env
+cp env.local.example .env
 $EDITOR .env
 ```
 
@@ -55,6 +54,9 @@ Set at least:
 
 - `API_URL`
 - `API_USERNAME` / `API_PASSWORD` if the Windows API uses auth
+- `COMPOSE_PROJECT_NAME`
+- `COMPOSE_PROFILES`
+- `DEPLOY_WORKDIR`
 - `SYNC_CLIENT_IMAGE`
 - `MYSQL_*`
 - `SUPERSET_SECRET_KEY`
@@ -63,12 +65,15 @@ Set at least:
 
 ```bash
 cd deploy
-docker compose up -d mysql adminer superset metabase caddy
+docker compose up -d mysql adminer superset metabase scheduler-runner ofelia
 ```
 
+Set `COMPOSE_PROFILES=proxy` in `.env` if you want Caddy enabled as part of the
+normal `docker compose up -d` flow.
+
 The sync worker is no longer a long-running container. It is started on demand
-by `docker compose run --rm sync-client`, and the VPS pulls it by image tag
-instead of building it from source.
+by `docker compose --profile manual run --rm sync-worker`, and Ofelia schedules
+the same one-shot compose run on the VPS.
 
 ### 4. Run the Sync Worker Manually
 
@@ -76,41 +81,31 @@ instead of building it from source.
 cd deploy
 
 # Incremental sync
-docker compose run --rm sync-client
+docker compose --profile manual run --rm sync-worker
 
 # Selected tables
-docker compose run --rm sync-client --tables JOBS EQLISTS
+docker compose --profile manual run --rm sync-worker --tables JOBS EQLISTS
 
 # Full refresh
-docker compose run --rm sync-client full-refresh
+docker compose --profile manual run --rm sync-worker full-refresh
 ```
 
-### 5. Install Production Timers
+### 5. Check the Scheduler
 
 ```bash
-sudo cp deploy/systemd/hiretrack-sync.service /etc/systemd/system/
-sudo cp deploy/systemd/hiretrack-sync.timer /etc/systemd/system/
-sudo cp deploy/systemd/hiretrack-sync-full-refresh.service /etc/systemd/system/
-sudo cp deploy/systemd/hiretrack-sync-full-refresh.timer /etc/systemd/system/
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now hiretrack-sync.timer
-sudo systemctl enable --now hiretrack-sync-full-refresh.timer
+docker compose logs -f ofelia
 ```
 
 ## Operations
 
 ```bash
-# Timer status
-systemctl list-timers 'hiretrack-sync*'
-
 # Run immediately
-sudo systemctl start hiretrack-sync.service
-sudo systemctl start hiretrack-sync-full-refresh.service
+docker compose --profile manual run --rm sync-worker
+docker compose --profile manual run --rm sync-worker full-refresh
 
-# Inspect logs
-journalctl -u hiretrack-sync.service -n 200 --no-pager
-journalctl -u hiretrack-sync-full-refresh.service -n 200 --no-pager
+# Pause/resume scheduling
+docker compose stop ofelia
+docker compose start ofelia
 ```
 
 ## Notes
@@ -120,7 +115,7 @@ journalctl -u hiretrack-sync-full-refresh.service -n 200 --no-pager
 - Incremental sync uses temp staging plus atomic metadata update.
 - Full refresh uses a staging table plus atomic `RENAME TABLE` swap.
 - One-off utilities remain in `tools/hiretrack-ops/` and are not part of the
-  production timer path.
+  production scheduler path.
 
 ## License
 

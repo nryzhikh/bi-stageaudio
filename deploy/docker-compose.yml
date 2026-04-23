@@ -1,15 +1,23 @@
 services:
-
   caddy:
     image: caddy:latest
+    # Opt-in: start with `docker compose --profile proxy up -d` or
+    # COMPOSE_PROFILES=proxy in .env. Plain `docker compose up -d` skips caddy,
+    # which is useful while DNS isn't pointed at the VPS (Let's Encrypt cannot
+    # issue certs for a raw IP, so auto-HTTPS fails and the browser hangs).
+    profiles: ["proxy"]
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     volumes:
+      # Managed TLS certs & runtime state live in named volumes so the
+      # container never writes into the rsync-managed deploy tree.
       - caddy_data:/data
-      - ./caddy_config:/config
-      - ./caddy_config/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_config:/config
+      # Config-as-code: single file, read-only. Caddy cannot mutate the
+      # surrounding ./caddy_config directory because we only bind the file.
+      - ./caddy_config/Caddyfile:/etc/caddy/Caddyfile:ro
 
 
   mysql:
@@ -17,10 +25,10 @@ services:
     container_name: hiretrack-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass123}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-hiretrack}
-      MYSQL_USER: ${MYSQL_USER:-hiretrack}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-hiretrack123}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
       - "3306:3306"
     volumes:
@@ -74,7 +82,7 @@ services:
     depends_on:
       - mysql
     environment:
-      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-your-secret-key-change-me}
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
       TALISMAN_ENABLED: "false"
     volumes:
       - superset_data:/app/superset_home
@@ -100,18 +108,16 @@ services:
       - metabase_data:/metabase.db
 
   # One-shot puller: streams data from the HireTrack Flask API on the Windows
-  # host into this stack's MySQL.
-  #
-  # The intended production model is host-side systemd timers that run:
-  #   docker compose run --rm sync-client
-  #   docker compose run --rm sync-client full-refresh
-  #
-  # Manual runs:
-  #   docker compose run --rm sync-client
-  #   docker compose run --rm sync-client --tables OpScans SORT
-  #   docker compose run --rm sync-client full-refresh
-  sync-client:
+  # host into this stack's MySQL. Manual and scheduled runs both use this
+  # service definition via `docker compose run --rm sync-worker ...`.
+  sync-worker:
     image: ${SYNC_CLIENT_IMAGE}
+    # Platform is env-driven so the arm64 Mac can run the amd64 image under
+    # emulation while the Linux VPS uses its native arch. Leave empty in
+    # .env.production; set to `linux/amd64` in local dev envs until CI
+    # publishes a multi-arch manifest.
+    platform: ${SYNC_WORKER_PLATFORM:-}
+    profiles: ["manual"]
     depends_on:
       mysql:
         condition: service_healthy
@@ -122,9 +128,9 @@ services:
       # internet for this consumer.
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-hiretrack}
-      MYSQL_USER: ${MYSQL_USER:-hiretrack}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-hiretrack123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       # API_URL, API_USERNAME, API_PASSWORD come from .env. No defaults
       # because pointing at the wrong host silently pulls nothing and
       # masks config mistakes.
@@ -136,6 +142,37 @@ services:
       # Reports persist across container recreates. Incremental watermarks
       # are stored inside MySQL metadata table `_sync_table_state`.
       - sync_reports:/data/reports
+
+  # Thin Docker CLI runner. Ofelia execs into this service and launches
+  # one-shot `sync-worker` containers using the compose file in this directory.
+  scheduler-runner:
+    image: docker:28-cli
+    restart: unless-stopped
+    working_dir: ${DEPLOY_WORKDIR}
+    command: ["sh", "-lc", "while true; do sleep 3600; done"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DEPLOY_WORKDIR}:${DEPLOY_WORKDIR}
+    labels:
+      ofelia.enabled: "true"
+      ofelia.job-exec.sync-incremental.schedule: "*/15 * * * *"
+      ofelia.job-exec.sync-incremental.command: >-
+        sh -lc 'docker compose --profile manual run --rm sync-worker --lock-timeout 0'
+      ofelia.job-exec.sync-incremental.no-overlap: "true"
+      ofelia.job-exec.sync-full-refresh.schedule: "0 3 * * 0"
+      ofelia.job-exec.sync-full-refresh.command: >-
+        sh -lc 'docker compose --profile manual run --rm sync-worker full-refresh --lock-timeout 0'
+      ofelia.job-exec.sync-full-refresh.no-overlap: "true"
+
+  ofelia:
+    image: mcuadros/ofelia:latest
+    container_name: hiretrack-ofelia
+    restart: unless-stopped
+    depends_on:
+      - scheduler-runner
+    command: daemon --docker -f label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   # grafana:
   #   image: grafana/grafana:latest
@@ -153,6 +190,7 @@ services:
 
 volumes:
   caddy_data:
+  caddy_config:
   # postgres_data:
   superset_data:
   metabase_data:
