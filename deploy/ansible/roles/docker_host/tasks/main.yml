@@ -69,7 +69,7 @@
 
 - name: Add deploy user to docker group
   ansible.builtin.user:
-    name: "{{ hiretrack_owner }}"
+    name: "{{ deploy_owner }}"
     groups: docker
     append: true
   notify: Restart docker

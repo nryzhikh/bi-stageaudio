@@ -617,6 +617,14 @@ class HireTrackMySQLSync:
         If `pk` is supplied, a PRIMARY KEY constraint is added so later upserts
         can use ON DUPLICATE KEY UPDATE. The pk column type is forced to a
         non-TEXT type because MySQL can't PK a TEXT column directly.
+
+        We intentionally do NOT add an `_synced_at ON UPDATE CURRENT_TIMESTAMP`
+        column. Per-row sync timestamps on an UPSERT-heavy workload force a
+        full row rewrite (and a full binlog event) on every re-ingest even
+        when no source column actually changed, which made the binlog the
+        single biggest disk consumer on the production VPS. The last-sync
+        timestamp for a whole table lives in `_sync_table_state.updated_at`,
+        which is enough for operational observability.
         """
         safe_table = self.sanitize_name(target_table or table_name)
         safe_pk = self.sanitize_name(pk) if pk else None
@@ -633,9 +641,6 @@ class HireTrackMySQLSync:
             if safe_col == safe_pk and col_type in ('MEDIUMTEXT', 'LONGTEXT'):
                 col_type = 'VARCHAR(255)'
             col_definitions.append(f'`{safe_col}` {col_type}')
-
-        col_definitions.append('`_synced_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP '
-                               'ON UPDATE CURRENT_TIMESTAMP')
 
         if safe_pk:
             if safe_pk not in safe_columns:

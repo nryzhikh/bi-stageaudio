@@ -4,8 +4,8 @@ superset.stageaudio.cloud {
     }
 }
 
-metabase.stageaudio.cloud {
-    reverse_proxy metabase:3000 {
+db.stageaudio.cloud {
+    reverse_proxy cloudbeaver:8978 {
       flush_interval -1
     }
 }

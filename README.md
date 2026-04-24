@@ -11,7 +11,7 @@ Windows Server                      Linux VPS
 │ Flask API               │  HTTP   │ docker compose                    │
 │ apps/api/app.py         │ ─────►  │ - mysql                           │
 │                         │         │ - superset                        │
-│ ODBC -> NexusDB         │         │ - adminer / metabase / caddy      │
+│ ODBC -> NexusDB         │         │ - cloudbeaver / caddy             │
 └─────────────────────────┘         │                                    │
                                     │ ofelia scheduler                   │
                                     │ - runs scheduled compose jobs      │
@@ -30,6 +30,7 @@ apps/
   sync-worker/          One-shot sync worker container
 deploy/
   docker-compose.yml    Linux VPS stack
+  deploy.sh             Local/prod deploy helper
   env.local.example     Local compose environment template
   env.production.example Production compose environment template
 tools/hiretrack-ops/    Operator-only discovery and one-off scripts
@@ -56,16 +57,25 @@ Set at least:
 - `API_USERNAME` / `API_PASSWORD` if the Windows API uses auth
 - `COMPOSE_PROJECT_NAME`
 - `COMPOSE_PROFILES`
-- `DEPLOY_WORKDIR`
+- `DEPLOY_DIR` (absolute path to this `deploy/` directory)
 - `SYNC_CLIENT_IMAGE`
 - `MYSQL_*`
 - `SUPERSET_SECRET_KEY`
 
 ### 3. Start the Compose Stack
 
+Deploy to the VPS:
+
 ```bash
 cd deploy
-docker compose up -d mysql adminer superset metabase scheduler-runner ofelia
+./deploy.sh prod
+```
+
+Or start locally:
+
+```bash
+cd deploy
+docker compose up -d mysql cloudbeaver superset scheduler-runner ofelia
 ```
 
 Set `COMPOSE_PROFILES=proxy` in `.env` if you want Caddy enabled as part of the

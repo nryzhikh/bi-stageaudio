@@ -1,24 +1,24 @@
 ---
 - name: Install base apt packages
   ansible.builtin.apt:
-    name: "{{ hiretrack_bootstrap_packages }}"
+    name: "{{ bootstrap_packages }}"
     state: present
     update_cache: true
 
 - name: Create deployment root
   ansible.builtin.file:
-    path: "{{ hiretrack_deploy_root }}"
+    path: "{{ deploy_root }}"
     state: directory
-    owner: "{{ hiretrack_owner }}"
-    group: "{{ hiretrack_group }}"
+    owner: "{{ deploy_owner }}"
+    group: "{{ deploy_group }}"
     mode: "0755"
 
 - name: Create deploy data directories
   ansible.builtin.file:
-    path: "{{ hiretrack_deploy_root }}/{{ item }}"
+    path: "{{ deploy_root }}/{{ item }}"
     state: directory
-    owner: "{{ hiretrack_owner }}"
-    group: "{{ hiretrack_group }}"
+    owner: "{{ deploy_owner }}"
+    group: "{{ deploy_group }}"
     mode: "0755"
   loop:
     - deploy
@@ -31,11 +31,10 @@
     rule: allow
     port: "{{ item }}"
     proto: tcp
-  loop: "{{ hiretrack_public_tcp_ports }}"
+  loop: "{{ public_tcp_ports }}"
 
 - name: Enable UFW
   community.general.ufw:
     state: enabled
     policy: deny
     direction: incoming
-

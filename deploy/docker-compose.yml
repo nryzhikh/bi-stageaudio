@@ -1,3 +1,14 @@
+# Shared json-file log rotation for every service in this stack. Docker's
+# default json-file driver has NO size cap — on a small VPS the MySQL error
+# loop plus the 15-minute sync-worker runs can easily add GB/week of log files
+# under /var/lib/docker/containers. Anchor this once and alias into each
+# service so rotation stays consistent and we don't drift per-service.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   caddy:
     image: caddy:latest
@@ -7,6 +18,7 @@ services:
     # issue certs for a raw IP, so auto-HTTPS fails and the browser hangs).
     profiles: ["proxy"]
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -29,84 +41,98 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE}
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    # Loopback-only publish. In-compose consumers (sync-worker, superset,
+    # cloudbeaver) reach MySQL over the compose network at host `mysql:3306`
+    # and do NOT need this mapping. The 127.0.0.1 bind is kept purely so an
+    # operator on the VPS can open an SSH tunnel for desktop clients:
+    #   ssh -L 3306:127.0.0.1:3306 user@vps
+    # Remove this line entirely to harden further.
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./init:/docker-entrypoint-initdb.d
+    # No --default-authentication-plugin=mysql_native_password here: that plugin
+    # is legacy and weak. MySQL 8.0 defaults to caching_sha2_password, which is
+    # what we want. Clients that still need native_password can opt in per-user
+    # via ALTER USER, rather than flipping the server-wide default.
+    #
+    # Binlog tuning rationale (this stack has NO replica or PITR tooling):
+    #   - Keep binlogs ON so point-in-time recovery stays possible if we ever
+    #     add a replica/backup consumer, but bound them hard so they cannot
+    #     fill a ~30 GB VPS disk on their own. MySQL 8.0 defaults are
+    #     30-day retention with 1 GiB per file, which on this workload
+    #     (weekly full refresh + 15-min incremental upserts) reaches tens of
+    #     GB of binlog within weeks.
+    #   - binlog-expire-logs-seconds=86400: keep 24 h of history.
+    #   - max-binlog-size=256M: more, smaller files → pruning is smoother
+    #     and a runaway job cannot produce a single 1+ GB event file.
+    #   - binlog-row-image=MINIMAL: write only the PK + changed columns in
+    #     RBR. Cuts binlog volume ~60-70% for our UPSERT-heavy sync pattern.
+    # If you need full row images again (e.g. to feed a downstream CDC), flip
+    # binlog-row-image back to FULL and extend the expiry — do not remove the
+    # caps.
     command: >
-      --default-authentication-plugin=mysql_native_password
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
+      --local-infile=0
+      --binlog-expire-logs-seconds=86400
+      --max-binlog-size=256M
+      --binlog-row-image=MINIMAL
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # postgres:
-  #   image: postgres:16
-  #   container_name: hiretrack-postgres
-  #   restart: unless-stopped
-  #   environment:
-  #     POSTGRES_DB: ${POSTGRES_DB:-hiretrack}
-  #     POSTGRES_USER: ${POSTGRES_USER:-hiretrack}
-  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hiretrack123}
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U hiretrack"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
-
-  adminer:
-    image: adminer
-    container_name: hiretrack-adminer
+  # CloudBeaver CE — web frontend for DBeaver. Replaces Adminer: real SQL
+  # editor with autocomplete, schema browser, ER diagrams, query history,
+  # and its own user/role layer so we never expose the MySQL port publicly.
+  # Reach it via Caddy at db.stageaudio.cloud (proxy profile), or locally at
+  # 127.0.0.1:8978. First run: open the URL → complete the admin wizard →
+  # add a connection pointing at host `mysql`, port 3306.
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:26.0.3
+    container_name: hiretrack-cloudbeaver
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    logging: *default-logging
     depends_on:
-      - mysql
-    environment:
-      ADMINER_DEFAULT_SERVER: mysql
+      mysql:
+        condition: service_healthy
+    # Bind to loopback only. Public access is handled by Caddy → cloudbeaver:8978.
+    ports:
+      - "127.0.0.1:8978:8978"
+    volumes:
+      - cloudbeaver_workspace:/opt/cloudbeaver/workspace
 
   superset:
-    image: apache/superset:4.1.2-dev  # -dev images include psycopg2
+    image: apache/superset:4.1.2-dev
     container_name: hiretrack-superset
     restart: unless-stopped
+    logging: *default-logging
+    # Loopback-only: public access goes through Caddy → superset:8088 at
+    # superset.stageaudio.cloud. Never expose :8088 to the internet directly
+    # (no WAF, and Superset's own auth is not enough in front of the raw port).
     ports:
-      - "8088:8088"
+      - "127.0.0.1:8088:8088"
     depends_on:
       - mysql
     environment:
       SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
       TALISMAN_ENABLED: "false"
+      ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME}
+      ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
     volumes:
       - superset_data:/app/superset_home
     command: >
       bash -c "
         superset db upgrade &&
-        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin || true &&
+        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@stageaudio.cloud --password hs1AzRVc1OEjqfSWYhes || true &&
         superset init &&
         superset run -h 0.0.0.0 -p 8088
       "
-
-  metabase:
-    image: metabase/metabase:latest
-    container_name: hiretrack-metabase
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    depends_on:
-      - mysql
-    environment:
-      MB_DB_TYPE: h2  # Metabase's internal DB (simpler setup)
-    volumes:
-      - metabase_data:/metabase.db
-
   # One-shot puller: streams data from the HireTrack Flask API on the Windows
   # host into this stack's MySQL. Manual and scheduled runs both use this
   # service definition via `docker compose run --rm sync-worker ...`.
@@ -118,6 +144,7 @@ services:
     # publishes a multi-arch manifest.
     platform: ${SYNC_WORKER_PLATFORM:-}
     profiles: ["manual"]
+    logging: *default-logging
     depends_on:
       mysql:
         condition: service_healthy
@@ -150,11 +177,12 @@ services:
   scheduler-runner:
     image: docker:28-cli
     restart: unless-stopped
-    working_dir: ${DEPLOY_WORKDIR}
+    logging: *default-logging
+    working_dir: ${DEPLOY_DIR:?DEPLOY_DIR is required}
     command: ["sh", "-lc", "while true; do sleep 3600; done"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${DEPLOY_WORKDIR}:${DEPLOY_WORKDIR}
+      - ${DEPLOY_DIR}:${DEPLOY_DIR}
     labels:
       ofelia.enabled: "true"
       ofelia.job-exec.sync-incremental.schedule: "*/15 * * * *"
@@ -170,32 +198,19 @@ services:
     image: mcuadros/ofelia:latest
     container_name: hiretrack-ofelia
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - scheduler-runner
     command: daemon --docker -f label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
-  # grafana:
-  #   image: grafana/grafana:latest
-  #   container_name: hiretrack-grafana
-  #   restart: unless-stopped
-  #   ports:
-  #     - "3001:3000"
-  #   depends_on:
-  #     - mysql
-  #   environment:
-  #     GF_SECURITY_ADMIN_USER: admin
-  #     GF_SECURITY_ADMIN_PASSWORD: admin
-  #   volumes:
-  #     - grafana_data:/var/lib/grafana
-
 volumes:
   caddy_data:
   caddy_config:
   # postgres_data:
   superset_data:
-  metabase_data:
   # grafana_data:
   mysql_data:
   sync_reports:
+  cloudbeaver_workspace:

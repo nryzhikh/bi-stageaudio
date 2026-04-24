@@ -34,13 +34,13 @@ Then on Windows, install the service from `E:\hiretrack-flask-api\server`.
 Expected checkout path:
 
 ```text
-/opt/hiretrack-sync
+/opt/bi-stageaudio
 ```
 
 ### Configure environment
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 cp env.production.example .env
 $EDITOR .env
 ```
@@ -49,7 +49,8 @@ Set:
 
 - `COMPOSE_PROJECT_NAME`
 - `COMPOSE_PROFILES`
-- `DEPLOY_WORKDIR`
+- `DEPLOY_DIR` (absolute path on the VPS, e.g. `/opt/bi-stageaudio/deploy`)
+- `DEPLOY_REMOTE` (SSH target alias or `user@host`)
 - `API_URL`
 - `API_USERNAME` / `API_PASSWORD` if needed
 - `SYNC_CLIENT_IMAGE`
@@ -62,16 +63,37 @@ Set:
 
 ### Start the stack
 
+From your workstation, deploy the runtime bundle and selected environment:
+
 ```bash
-cd /opt/hiretrack-sync/deploy
-docker compose up -d mysql adminer superset metabase scheduler-runner ofelia
+cd deploy
+./deploy.sh prod
+```
+
+The script uses `deploy/.env.production` when present, otherwise
+`deploy/env.production.example`, uploads it as remote `.env`, then runs
+`docker compose config -q`, `docker compose pull`, and
+`docker compose up -d --remove-orphans` on the VPS.
+
+To override the target:
+
+```bash
+cd deploy
+DEPLOY_SSH_KEY=~/.ssh/hiretrack_win ./deploy.sh prod deploy@87.242.119.130
+```
+
+Manual startup on the VPS is still:
+
+```bash
+cd /opt/bi-stageaudio/deploy
+docker compose up -d mysql cloudbeaver superset scheduler-runner ofelia
 ```
 
 Set `COMPOSE_PROFILES=proxy` in `.env` if you want Caddy enabled in the normal
 startup path. You can still override it ad hoc:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose --profile proxy up -d
 ```
 
@@ -85,21 +107,21 @@ plus the prebuilt sync-worker image referenced by `SYNC_CLIENT_IMAGE`.
 Incremental run:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose --profile manual run --rm sync-worker
 ```
 
 Full refresh:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose --profile manual run --rm sync-worker full-refresh
 ```
 
 Selected tables:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose --profile manual run --rm sync-worker --tables JOBS EQLISTS
 ```
 
@@ -113,14 +135,14 @@ Ofelia schedules two jobs from labels on `scheduler-runner`:
 Validate the compose config:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose config -q
 ```
 
 Check the scheduler:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose ps ofelia scheduler-runner
 docker compose logs -f ofelia
 ```
@@ -128,21 +150,21 @@ docker compose logs -f ofelia
 Run a sync immediately:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose --profile manual run --rm sync-worker
 ```
 
 Run a full refresh immediately:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose --profile manual run --rm sync-worker full-refresh
 ```
 
 Pause or resume scheduling:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose stop ofelia
 docker compose start ofelia
 ```
@@ -150,7 +172,7 @@ docker compose start ofelia
 Compose service logs:
 
 ```bash
-cd /opt/hiretrack-sync/deploy
+cd /opt/bi-stageaudio/deploy
 docker compose logs -f mysql superset metabase
 ```
 

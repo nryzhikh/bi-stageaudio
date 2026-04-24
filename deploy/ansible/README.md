@@ -4,7 +4,12 @@ This Ansible scaffold is now bootstrap-only for the Linux production host.
 
 - `bootstrap.yml`
   Installs base packages, Docker Engine, Docker Compose plugin, Tailscale, and
-  prepares the filesystem layout under `/opt/hiretrack-sync`.
+  prepares the filesystem layout under `deploy_root` (default
+  `/opt/bi-stageaudio`, configurable in
+  `inventory/production/group_vars/linux/main.yml`).
+
+The bootstrap creates `{{ deploy_root }}/deploy`, which must equal `DEPLOY_DIR`
+in `deploy/.env.production`. Keep those two in sync.
 
 ## Structure
 
