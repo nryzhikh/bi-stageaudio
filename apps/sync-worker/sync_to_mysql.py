@@ -337,6 +337,49 @@ class HireTrackMySQLSync:
         finally:
             cursor.close()
 
+    def cleanup_orphan_staging(self, conn) -> int:
+        """Drop leftover staging/backup tables from prior crashed runs.
+
+        Two private patterns the worker leaves behind on a clean run, and that
+        accumulate forever if a run dies between create-staging and final
+        DROP-backup:
+
+          - `<table>__staging` — full-refresh staging that died mid-stream
+            (before swap_full_refresh_tables ran).
+          - `_<table>_old`     — backup created during the RENAME swap that
+            wasn't dropped (worker died between RENAME and final DROP).
+
+        Called once per run inside the advisory-lock window, so we cannot race
+        another worker mid-swap. Idempotent — querying information_schema first
+        means we only DROP tables that actually exist, which keeps the log
+        signal accurate (every line == an orphan we found).
+
+        Important: the LIKE patterns escape `_` because in SQL `_` is a
+        single-char wildcard. Without escaping, `__staging` would match any
+        2-char prefix table name and we could nuke unrelated tables.
+        """
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                'SELECT table_name FROM information_schema.tables '
+                'WHERE table_schema = DATABASE() '
+                'AND (table_name LIKE %s OR table_name LIKE %s)',
+                (r'%\_\_staging', r'\_%\_old'),
+            )
+            orphans = [row[0] for row in cursor.fetchall()]
+            for name in orphans:
+                cursor.execute(f'DROP TABLE IF EXISTS `{name}`')
+                log_event(
+                    logging.INFO,
+                    'orphan_staging_dropped',
+                    'Dropped orphan staging or backup table',
+                    table=name,
+                )
+            conn.commit()
+            return len(orphans)
+        finally:
+            cursor.close()
+
     def load_table_states(self, conn) -> Dict[str, Dict[str, Any]]:
         """Read incremental watermark state from MySQL metadata tables."""
         cursor = conn.cursor(dictionary=True)
@@ -1234,6 +1277,14 @@ class HireTrackMySQLSync:
             log_event(logging.INFO, 'sync_run_lock_acquired', 'Sync run lock acquired', lock_name=lock_name)
 
             self.ensure_metadata_tables(conn)
+            orphans_dropped = self.cleanup_orphan_staging(conn)
+            if orphans_dropped:
+                log_event(
+                    logging.INFO,
+                    'orphan_staging_swept',
+                    'Cleaned orphan staging/backup tables before sync run',
+                    dropped=orphans_dropped,
+                )
             imported = self.import_legacy_state(conn, state_path)
             state = self.load_table_states(conn)
             log_event(

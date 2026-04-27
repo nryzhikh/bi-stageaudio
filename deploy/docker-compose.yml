@@ -57,34 +57,45 @@ services:
     # what we want. Clients that still need native_password can opt in per-user
     # via ALTER USER, rather than flipping the server-wide default.
     #
-    # Binlog tuning rationale (this stack has NO replica or PITR tooling):
-    #   - Keep binlogs ON so point-in-time recovery stays possible if we ever
-    #     add a replica/backup consumer, but bound them hard so they cannot
-    #     fill a ~30 GB VPS disk on their own. MySQL 8.0 defaults are
-    #     30-day retention with 1 GiB per file, which on this workload
-    #     (weekly full refresh + 15-min incremental upserts) reaches tens of
-    #     GB of binlog within weeks.
-    #   - binlog-expire-logs-seconds=86400: keep 24 h of history.
-    #   - max-binlog-size=256M: more, smaller files → pruning is smoother
-    #     and a runaway job cannot produce a single 1+ GB event file.
-    #   - binlog-row-image=MINIMAL: write only the PK + changed columns in
-    #     RBR. Cuts binlog volume ~60-70% for our UPSERT-heavy sync pattern.
-    # If you need full row images again (e.g. to feed a downstream CDC), flip
-    # binlog-row-image back to FULL and extend the expiry — do not remove the
-    # caps.
+    # Binlog rationale (this stack has NO replica or PITR tooling):
+    #   This node is a single-writer analytical replica that gets continuously
+    #   re-synced from the upstream HireTrack API by the sync-worker. There is
+    #   no MySQL replica, no CDC consumer, and no mysqldump+binlog PITR pipeline
+    #   downstream — nothing reads the binlog. With the current sync config,
+    #   tables not in `incremental:` get full-refresh on every 15-min run, which
+    #   writes ~600 MB of INSERTs per cycle (≈2.4 GB/h) into an append-only
+    #   journal that nothing consumes. On a 30 GB VPS that fills the disk in
+    #   ~12 h regardless of `binlog-expire-logs-seconds`, because retention can
+    #   only free *whole rotated files* and we generate them faster than the
+    #   24 h window can release them.
+    #
+    # --skip-log-bin disables the binary log entirely. InnoDB's redo log (small,
+    # bounded, circular) still guarantees crash recovery; we just stop keeping
+    # an external journal of changes that no one replays. If a replica or PITR
+    # tool is ever added, re-enable with bounded `--binlog-expire-logs-seconds`
+    # AND fix the worker to stop full-refreshing on a sub-hour cadence —
+    # otherwise the binlog will outpace any retention you can configure.
     command: >
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
       --local-infile=0
-      --binlog-expire-logs-seconds=86400
-      --max-binlog-size=256M
-      --binlog-row-image=MINIMAL
+      --skip-log-bin
     logging: *default-logging
+    # MySQL 8.0 first-init on an empty volume routinely takes 30-90s before
+    # the socket is open. Without `start_period`, the healthcheck retry budget
+    # (5 * 10s = 50s) expires mid-init, compose marks the service unhealthy,
+    # tears the dependency down, and SIGKILLs it after stop_grace_period →
+    # exit 137. `start_period` excludes startup failures from the retry count,
+    # `start_interval` polls fast during startup so we mark healthy ASAP, and
+    # the bumped `stop_grace_period` lets a real shutdown actually flush.
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 90s
+      start_interval: 5s
+    stop_grace_period: 60s
 
   # CloudBeaver CE — web frontend for DBeaver. Replaces Adminer: real SQL
   # editor with autocomplete, schema browser, ER diagrams, query history,

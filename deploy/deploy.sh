@@ -112,6 +112,11 @@ set -euo pipefail
 cd '$deploy_dir'
 docker compose config -q
 docker compose pull
-docker compose up -d --remove-orphans
+# --wait blocks until every started service is running AND (if it has a
+# healthcheck) healthy. --wait-timeout 300 covers a fresh-volume MySQL
+# init (~30-90s) plus the superset bootstrap (db upgrade + init), with
+# headroom. If this fires we want a real timeout error, not a SIGKILLed
+# half-up stack from compose tearing down a dependency mid-init.
+docker compose up -d --remove-orphans --wait --wait-timeout 300
 docker compose ps
 REMOTE_EOF
